@@ -30,7 +30,7 @@ jobs:
       # 2. Rust toolchain — reuse the same cache key as contract-ci.yml
       # -----------------------------------------------------------------------
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
