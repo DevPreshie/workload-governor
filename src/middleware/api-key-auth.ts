@@ -3,6 +3,14 @@ import { createHash } from 'crypto';
 import { pool } from '../db';
 import redis from '../services/redis';
 
+export interface ApiKeyIdentity {
+  keyHash: string;
+  maintainerAddress?: string;
+  orgId?: string;
+}
+
+export type AuthenticatedRequest = Request & { apiKeyIdentity?: ApiKeyIdentity };
+
 const KEY_LIMIT = 120;   // requests per minute for authenticated keys
 const IP_LIMIT = 30;     // requests per minute for unauthenticated IPs
 const WINDOW_SEC = 60;
@@ -16,10 +24,19 @@ function getIp(req: Request): string {
   return (typeof fwd === 'string' ? fwd.split(',')[0] : req.socket.remoteAddress) ?? 'unknown';
 }
 
-async function isValidApiKey(raw: string): Promise<boolean> {
+async function getApiKeyIdentity(raw: string): Promise<ApiKeyIdentity | undefined> {
   const h = hashKey(raw);
-  const { rows } = await pool.query('SELECT 1 FROM api_keys WHERE key_hash = $1', [h]);
-  return rows.length > 0;
+  const { rows } = await pool.query(
+    'SELECT key_hash, maintainer_address, org_id, revoked_at FROM api_keys WHERE key_hash = $1',
+    [h],
+  );
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row || row.revoked_at) return undefined;
+  return {
+    keyHash: h,
+    maintainerAddress: typeof row.maintainer_address === 'string' ? row.maintainer_address : undefined,
+    orgId: typeof row.org_id === 'string' ? row.org_id : undefined,
+  };
 }
 
 async function checkRedisLimit(
@@ -45,10 +62,13 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
   if (raw) {
     // Try to validate as API key first
     try {
-      const valid = await isValidApiKey(raw);
-      if (valid) {
+      const identity = await getApiKeyIdentity(raw);
+      if (identity) {
         const allowed = await checkRedisLimit(`key:${hashKey(raw)}`, KEY_LIMIT, res);
-        if (allowed) return next();
+        if (allowed) {
+          (req as AuthenticatedRequest).apiKeyIdentity = identity;
+          return next();
+        }
         return;
       }
     } catch {

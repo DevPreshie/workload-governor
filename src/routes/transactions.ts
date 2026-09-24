@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Address } from '@stellar/stellar-sdk';
 import { SorobanService } from '../soroban';
 import { Transaction } from '@stellar/stellar-sdk';
+import { maintainerAuth } from '../middleware/maintainer-auth';
 
 const router = Router();
 const soroban = new SorobanService();
@@ -126,7 +127,7 @@ router.post('/withdraw', (req: Request, res: Response) => {
   );
 });
 
-router.post('/assign', (req: Request, res: Response) => {
+router.post('/assign', maintainerAuth, (req: Request, res: Response) => {
   const { maintainer, contributor, org_id, issue_id, sequence } = req.body as Record<string, unknown>;
   const errors: ValidationError[] = [];
 
@@ -159,7 +160,7 @@ router.post('/assign', (req: Request, res: Response) => {
   );
 });
 
-router.post('/complete', (req: Request, res: Response) => {
+router.post('/complete', maintainerAuth, (req: Request, res: Response) => {
   const { maintainer, contributor, org_id, issue_id, sequence } = req.body as Record<string, unknown>;
   const errors: ValidationError[] = [];
 
@@ -192,7 +193,7 @@ router.post('/complete', (req: Request, res: Response) => {
   );
 });
 
-router.post('/revoke', (req: Request, res: Response) => {
+router.post('/revoke', maintainerAuth, (req: Request, res: Response) => {
   const { maintainer, contributor, org_id, issue_id, sequence } = req.body as Record<string, unknown>;
   const errors: ValidationError[] = [];
 

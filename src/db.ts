@@ -84,7 +84,14 @@ export async function migrate(): Promise<void> {
       id         SERIAL PRIMARY KEY,
       key_hash   TEXT NOT NULL UNIQUE,
       label      TEXT NOT NULL,
+      maintainer_address TEXT,
+      org_id     TEXT,
+      revoked_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS maintainer_address TEXT;
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id TEXT;
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
   `);
 }
