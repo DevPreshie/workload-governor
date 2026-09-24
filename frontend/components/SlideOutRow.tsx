@@ -16,7 +16,11 @@ export default function SlideOutRow({
 
   return (
     <div
-      className={sliding ? "slide-out" : ""}
+      // Use transform + opacity instead of max-height to avoid continuous
+      // layout recalculation on Safari (fixes #551).
+      // will-change: transform hints the GPU to promote this layer ahead of time.
+      className={sliding ? "slide-out-row" : ""}
+      style={{ willChange: sliding ? "transform, opacity" : undefined }}
       onAnimationEnd={sliding ? onRemoved : undefined}
     >
       {typeof children === "function"
