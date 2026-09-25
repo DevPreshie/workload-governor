@@ -4,6 +4,7 @@ import { Transaction } from '@stellar/stellar-sdk';
 import { verifyTransactionXdr } from '../xdrVerifier';
 import { logger } from '../logger';
 import { validateBody } from '../middleware/validation';
+import { getCache, setCache } from '../services/redis';
 import {
   applySchema,
   withdrawSchema,
@@ -107,6 +108,17 @@ router.post('/submit', validateBody(submitSchema), async (req: Request, res: Res
 
   const ip = req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? 'unknown';
 
+  // --- Idempotency key check ---
+  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+  if (idempotencyKey) {
+    const cacheKey = `idempotency:${idempotencyKey}`;
+    const cached = await getCache<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      res.json({ ...cached, idempotent: true });
+      return;
+    }
+  }
+
   // --- Verify the signed XDR ---
   const verification = verifyTransactionXdr(signed_xdr);
 
@@ -156,10 +168,17 @@ router.post('/submit', validateBody(submitSchema), async (req: Request, res: Res
       timestamp: new Date().toISOString(),
     });
 
-    res.json({
+    const responseBody = {
       hash: result.hash,
       status: result.status,
-    });
+    };
+
+    if (idempotencyKey) {
+      const cacheKey = `idempotency:${idempotencyKey}`;
+      await setCache(cacheKey, responseBody, 86400);
+    }
+
+    res.json(responseBody);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'submission error';
     res.status(500).json({ error: msg });
