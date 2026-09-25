@@ -35,6 +35,8 @@ tags:
     description: On-chain event history
   - name: contributors
     description: Contributor statistics
+  - name: transactions
+    description: Stellar transaction building and submission
 
 paths:
   /health:
@@ -276,6 +278,82 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /contributors/{address}/global-count:
+    get:
+      operationId: getContributorGlobalCount
+      tags: [contributors]
+      summary: Get contributor's global pending-application count (cached)
+      description: >
+        Returns the number of pending applications the contributor has across all
+        organizations. The result is served from a Redis cache keyed by
+        `global-count:{address}`. On a cache miss the value is fetched from the
+        Soroban contract and stored with a configurable TTL (default 30 s).
+      security: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Contributor Stellar address (G-address, 50-56 chars)
+      responses:
+        '200':
+          description: Global application count for the contributor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalCountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/submit:
+    post:
+      operationId: submitTransaction
+      tags: [transactions]
+      summary: Submit a pre-signed Stellar XDR transaction
+      description: >
+        Verifies the signed XDR (signature, timeBounds, contract ID) and broadcasts
+        it to the Stellar network. Supports idempotency via the `Idempotency-Key`
+        header — duplicate submissions with the same key within 24 hours return the
+        original cached response without re-broadcasting.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+          description: >
+            Client-generated unique key (e.g. UUID v4) to deduplicate submission
+            retries. Responses are cached for 24 hours. If a cached response exists
+            for this key, it is returned immediately with `idempotent: true` and no
+            re-broadcast occurs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitTransactionRequest'
+      responses:
+        '200':
+          description: Transaction submitted successfully (or returned from idempotency cache)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitTransactionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Transaction verification failed (invalid signature, expired, wrong contract)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -453,6 +531,25 @@ components:
           additionalProperties:
             type: integer
 
+    GlobalCountResponse:
+      type: object
+      required: [address, global_count, cached]
+      properties:
+        address:
+          type: string
+          description: Contributor Stellar address
+          example: GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN
+        global_count:
+          type: integer
+          minimum: 0
+          maximum: 15
+          description: Number of pending applications across all organizations
+          example: 3
+        cached:
+          type: boolean
+          description: Whether the result was served from the Redis cache
+          example: true
+
     Error:
       type: object
       required: [error, message]
@@ -463,3 +560,29 @@ components:
           type: string
         code:
           type: integer
+
+    SubmitTransactionRequest:
+      type: object
+      required: [signed_xdr]
+      properties:
+        signed_xdr:
+          type: string
+          description: Base64-encoded signed Stellar transaction envelope XDR
+
+    SubmitTransactionResponse:
+      type: object
+      required: [hash, status]
+      properties:
+        hash:
+          type: string
+          description: Transaction hash on the Stellar network
+          example: abc123def456...
+        status:
+          type: string
+          description: Submission status returned by Horizon/Soroban RPC
+          example: SUCCESS
+        idempotent:
+          type: boolean
+          description: >
+            Present and `true` when the response was served from the idempotency
+            cache rather than re-broadcasting the transaction.
