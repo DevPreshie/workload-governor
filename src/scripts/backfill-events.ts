@@ -76,6 +76,7 @@ function parseArgs(): {
  */
 function decodeScVal(xdrBase64: string): unknown {
   try {
+    if (xdrBase64.length > 65_536) return null;
     const scVal = stellarXdr.ScVal.fromXDR(xdrBase64, 'base64');
     return scValToNative(scVal);
   } catch {

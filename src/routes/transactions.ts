@@ -215,6 +215,10 @@ router.post('/submit', validateBody(submitSchema), async (req: Request, res: Res
   // --- Broadcast to network ---
   try {
     const { Transaction: StellarTx, xdr } = await import('@stellar/stellar-sdk');
+    if (signed_xdr.length > 65_536) {
+      res.status(400).json({ error: 'XDR payload too large' });
+      return;
+    }
     const envelope = xdr.TransactionEnvelope.fromXDR(signed_xdr, 'base64');
     const tx = new StellarTx(
       envelope,
