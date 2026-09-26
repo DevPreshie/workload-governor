@@ -156,3 +156,118 @@ test.describe('Mobile navigation drawer', () => {
     expect(drawerWidth).toBeLessThanOrEqual(viewportWidth * 0.86); // 85 vw + 1 px tolerance
   });
 });
+
+// ---------------------------------------------------------------------------
+// Visual regression tests — Drawer & Modal states (issue #885)
+// ---------------------------------------------------------------------------
+
+test.describe('Visual regression — Drawer and Modal states (#885)', () => {
+  // Mobile viewport: 375 × 667
+  test.describe('Mobile viewport (375x667)', () => {
+    test.use({ viewport: { width: 375, height: 667 } });
+
+    test('mobile drawer closed — light theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      await expect(page.getByTestId('hamburger-button')).toBeVisible();
+      await expect(page).toHaveScreenshot('drawer-closed-mobile-light.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('mobile drawer closed — dark theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      await expect(page.getByTestId('hamburger-button')).toBeVisible();
+      await expect(page).toHaveScreenshot('drawer-closed-mobile-dark.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('mobile drawer open — light theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      await page.getByTestId('hamburger-button').click();
+      await expect(page.getByTestId('mobile-drawer')).toBeVisible();
+      await expect(page).toHaveScreenshot('drawer-open-mobile-light.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('mobile drawer open — dark theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      await page.getByTestId('hamburger-button').click();
+      await expect(page.getByTestId('mobile-drawer')).toBeVisible();
+      await expect(page).toHaveScreenshot('drawer-open-mobile-dark.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('mobile modal open — light theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      const applyBtn = page.locator('[data-testid="issue-card"] button').first();
+      await applyBtn.click();
+      await expect(page.getByTestId('tx-modal')).toBeVisible();
+      await expect(page).toHaveScreenshot('modal-open-mobile-light.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('mobile modal open — dark theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      const applyBtn = page.locator('[data-testid="issue-card"] button').first();
+      await applyBtn.click();
+      await expect(page.getByTestId('tx-modal')).toBeVisible();
+      await expect(page).toHaveScreenshot('modal-open-mobile-dark.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+  });
+
+  // Desktop viewport: 1280 × 800
+  test.describe('Desktop viewport (1280x800)', () => {
+    test.use({ viewport: { width: 1280, height: 800 } });
+
+    test('desktop drawer/nav state — light theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      await expect(page).toHaveScreenshot('drawer-desktop-light.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('desktop drawer/nav state — dark theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      await expect(page).toHaveScreenshot('drawer-desktop-dark.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('desktop modal open — light theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      const applyBtn = page.locator('[data-testid="issue-card"] button').first();
+      await applyBtn.click();
+      await expect(page.getByTestId('tx-modal')).toBeVisible();
+      await expect(page).toHaveScreenshot('modal-open-desktop-light.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+
+    test('desktop modal open — dark theme', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      const applyBtn = page.locator('[data-testid="issue-card"] button').first();
+      await applyBtn.click();
+      await expect(page.getByTestId('tx-modal')).toBeVisible();
+      await expect(page).toHaveScreenshot('modal-open-desktop-dark.png', {
+        maxDiffPixelRatio: 0.02,
+      });
+    });
+  });
+});
+
