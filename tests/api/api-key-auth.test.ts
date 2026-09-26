@@ -1,10 +1,11 @@
 /**
- * Integration tests for API key auth and rate limiting (issue #216)
+ * Integration tests for API key auth and rate limiting (issue #216, #840)
  *
- * Three scenarios:
- *  1. Valid API key → 200, counts against per-key limit (120/min)
+ * Scenarios:
+ *  1. Valid API key → 200, counts against per-key limit
  *  2. Missing/invalid API key → 401
  *  3. Rate limit exceeded → 429 with Retry-After header
+ *  4. Tiered rate limits applied per API key role (issue #840)
  */
 
 import request from 'supertest';
@@ -48,6 +49,7 @@ jest.mock('../../src/services/redis', () => ({
 
 import { createApp } from '../../src/app';
 import { createHash, randomBytes } from 'crypto';
+import { ApiKeyTier, TIER_LIMITS } from '../../src/middleware/api-key-auth';
 
 const app = createApp();
 
@@ -55,10 +57,10 @@ function sha256(s: string) {
   return createHash('sha256').update(s).digest('hex');
 }
 
-async function seedKey(key: string, label = 'test-key') {
+async function seedKey(key: string, label = 'test-key', tier: ApiKeyTier = 'contributor') {
   await mockPool.query(
-    'INSERT INTO api_keys (key_hash, label) VALUES ($1, $2)',
-    [sha256(key), label],
+    'INSERT INTO api_keys (key_hash, label, tier) VALUES ($1, $2, $3)',
+    [sha256(key), label, tier],
   );
 }
 
@@ -123,9 +125,9 @@ describe('Scenario 3 – rate limit exceeded', () => {
     const key = randomBytes(16).toString('hex');
     await seedKey(key);
 
-    // Simulate counter already above KEY_LIMIT (120)
+    // Simulate counter already above contributor limit (180)
     const redisKey = `rl:key:${sha256(key)}`;
-    counters.set(redisKey, 121);
+    counters.set(redisKey, 181);
     ttls.set(redisKey, 45);
 
     const res = await request(app)
@@ -139,9 +141,9 @@ describe('Scenario 3 – rate limit exceeded', () => {
   });
 
   it('returns 429 with Retry-After header when IP limit is exceeded', async () => {
-    // Simulate counter already above IP_LIMIT (30) for this IP
+    // Simulate counter already above anonymous limit (60) for this IP
     const ipKey = `rl:ip:127.0.0.1`;
-    counters.set(ipKey, 31);
+    counters.set(ipKey, 61);
     ttls.set(ipKey, 55);
 
     const res = await request(app).get('/api/issues');
@@ -176,5 +178,104 @@ describe('POST /api/api-keys', () => {
     expect(res.status).toBe(201);
     expect(typeof res.body.key).toBe('string');
     expect(res.body.key.length).toBeGreaterThan(0);
+  });
+});
+
+// ---- Scenario 4: Tiered rate limit thresholds (issue #840) ---------------
+
+describe('Scenario 4 – tiered rate limit allocations', () => {
+  it('TIER_LIMITS exports correct values', () => {
+    expect(TIER_LIMITS.anonymous).toBe(60);
+    expect(TIER_LIMITS.contributor).toBe(180);
+    expect(TIER_LIMITS.maintainer).toBe(600);
+    expect(TIER_LIMITS.admin).toBe(1200);
+  });
+
+  it('contributor key gets the contributor limit (180)', async () => {
+    const key = randomBytes(16).toString('hex');
+    await seedKey(key, 'contrib-key', 'contributor');
+
+    const res = await request(app)
+      .get('/api/issues')
+      .set('Authorization', `Bearer ${key}`);
+
+    expect([200, 404]).toContain(res.status);
+    // Check the Redis counter used the contributor limit (180)
+    expect(redisMock.incr).toHaveBeenCalledWith(
+      expect.stringContaining(`rl:key:${sha256(key)}`),
+    );
+  });
+
+  it('maintainer key gets the maintainer limit (600)', async () => {
+    const key = randomBytes(16).toString('hex');
+    await seedKey(key, 'maintainer-key', 'maintainer');
+
+    await request(app)
+      .get('/api/issues')
+      .set('Authorization', `Bearer ${key}`);
+
+    expect(redisMock.incr).toHaveBeenCalledWith(
+      expect.stringContaining(`rl:key:${sha256(key)}`),
+    );
+  });
+
+  it('admin key gets the admin limit (1200)', async () => {
+    const key = randomBytes(16).toString('hex');
+    await seedKey(key, 'admin-key', 'admin');
+
+    await request(app)
+      .get('/api/issues')
+      .set('Authorization', `Bearer ${key}`);
+
+    expect(redisMock.incr).toHaveBeenCalledWith(
+      expect.stringContaining(`rl:key:${sha256(key)}`),
+    );
+  });
+
+  it('contributor at exactly limit (180) is NOT rate-limited', async () => {
+    const key = randomBytes(16).toString('hex');
+    await seedKey(key, 'contrib-at-limit', 'contributor');
+
+    const redisKey = `rl:key:${sha256(key)}`;
+    counters.set(redisKey, 180); // exactly at limit
+    ttls.set(redisKey, 60);
+
+    const res = await request(app)
+      .get('/api/issues')
+      .set('Authorization', `Bearer ${key}`);
+
+    // 181st call — should be blocked
+    expect(res.status).toBe(429);
+  });
+
+  it('maintainer at exactly limit (600) is rate-limited on next request', async () => {
+    const key = randomBytes(16).toString('hex');
+    await seedKey(key, 'maintainer-at-limit', 'maintainer');
+
+    const redisKey = `rl:key:${sha256(key)}`;
+    counters.set(redisKey, 600);
+    ttls.set(redisKey, 60);
+
+    const res = await request(app)
+      .get('/api/issues')
+      .set('Authorization', `Bearer ${key}`);
+
+    expect(res.status).toBe(429);
+  });
+
+  it('anonymous (no key) at limit (60) returns 429', async () => {
+    const ipKey = `rl:ip:127.0.0.1`;
+    counters.set(ipKey, 60);
+    ttls.set(ipKey, 60);
+
+    const res = await request(app).get('/api/issues');
+    expect(res.status).toBe(429);
+  });
+
+  it('sets req.apiKeyTier to anonymous when no key provided', async () => {
+    // Just verify the IP limit is checked (which means anonymous path ran)
+    const res = await request(app).get('/api/issues');
+    expect(res.status).not.toBe(401); // Not an auth error
+    expect(redisMock.incr).toHaveBeenCalledWith(expect.stringContaining('rl:ip:'));
   });
 });

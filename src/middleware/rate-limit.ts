@@ -1,5 +1,6 @@
 import rateLimit from 'express-rate-limit';
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
+import { ApiKeyTier, TIER_LIMITS } from './api-key-auth';
 
 const getClientIp = (req: Request): string => {
   const forwarded = req.headers['x-forwarded-for'];
@@ -82,3 +83,73 @@ export function cleanupExpiredLimits() {
 }
 
 setInterval(cleanupExpiredLimits, 60 * 1000);
+
+// ---------------------------------------------------------------------------
+// Tiered rate limiter (issue #840)
+// ---------------------------------------------------------------------------
+
+/**
+ * In-memory store for tiered rate limit tracking.
+ * Keyed by a discriminator built from (tier + IP or API-key hash).
+ */
+const tieredStore: Map<string, { count: number; resetTime: number }> = new Map();
+const TIER_WINDOW_MS = 60 * 1000; // 1 minute
+
+export function cleanupTieredLimits(): void {
+  const now = Date.now();
+  for (const [key, entry] of tieredStore.entries()) {
+    if (now > entry.resetTime) tieredStore.delete(key);
+  }
+}
+
+setInterval(cleanupTieredLimits, 60 * 1000);
+
+/**
+ * tieredRateLimiter
+ *
+ * Applied after apiKeyAuth has run so `req.apiKeyTier` is already set.
+ * Enforces the following per-minute limits:
+ *   anonymous   →   60 req/min
+ *   contributor →  180 req/min
+ *   maintainer  →  600 req/min
+ *   admin       → 1200 req/min
+ *
+ * Injects X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset
+ * headers on every response.  Returns 429 + Retry-After when quota exceeded.
+ */
+export function tieredRateLimiter(req: Request, res: Response, next: NextFunction): void {
+  const tier: ApiKeyTier = req.apiKeyTier ?? 'anonymous';
+  const limit = TIER_LIMITS[tier];
+  const ip = getClientIp(req);
+  const key = `tier:${tier}:${ip}`;
+
+  const now = Date.now();
+  let entry = tieredStore.get(key);
+
+  if (!entry || now > entry.resetTime) {
+    entry = { count: 0, resetTime: now + TIER_WINDOW_MS };
+    tieredStore.set(key, entry);
+  }
+
+  entry.count++;
+
+  const remaining = Math.max(limit - entry.count, 0);
+  const resetEpochSec = Math.ceil(entry.resetTime / 1000);
+
+  res.set('X-RateLimit-Limit', String(limit));
+  res.set('X-RateLimit-Remaining', String(remaining));
+  res.set('X-RateLimit-Reset', String(resetEpochSec));
+
+  if (entry.count > limit) {
+    const retryAfter = Math.ceil((entry.resetTime - now) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error: 'rate limit exceeded',
+      tier,
+      retryAfter,
+    });
+    return;
+  }
+
+  next();
+}
