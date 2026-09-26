@@ -298,6 +298,116 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/leaderboard:
+    get:
+      summary: Contributor leaderboard ranked by completed assignments
+      operationId: getLeaderboard
+      tags:
+        - Leaderboard
+      parameters:
+        - name: timeframe
+          in: query
+          schema:
+            type: string
+            enum: [week, month, all]
+            default: all
+          description: Time window for ranking (week = last 7 days, month = last 30 days, all = all time)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum number of leaderboard entries to return
+        - name: org_id
+          in: query
+          schema:
+            type: string
+          description: Optional filter by organization ID
+      responses:
+        '200':
+          description: Leaderboard results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  leaderboard:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LeaderboardEntry'
+                  timeframe:
+                    type: string
+                    enum: [week, month, all]
+                    description: Applied timeframe filter
+                  limit:
+                    type: integer
+                    description: Applied limit
+                required:
+                  - leaderboard
+                  - timeframe
+                  - limit
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/audit/logs:
+    get:
+      summary: Retrieve paginated audit log entries
+      operationId: getAuditLogs
+      tags:
+        - Audit
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_type
+          in: query
+          schema:
+            type: string
+            enum: [cap_update, maintainer_register, api_key_created, api_key_revoked]
+          description: Filter by audit event type
+        - name: actor
+          in: query
+          schema:
+            type: string
+          description: Filter by actor public key
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+          description: Number of log entries to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of log entries to skip
+      responses:
+        '200':
+          description: Paginated list of audit log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLogEntry'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+                required:
+                  - logs
+                  - pagination
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /docs:
     get:
       summary: Swagger UI documentation
@@ -587,6 +697,64 @@ components:
       required:
         - error
 
+    LeaderboardEntry:
+      type: object
+      properties:
+        contributor:
+          type: string
+          description: Contributor Stellar address
+        org_id:
+          type: string
+          description: Organization ID
+        completed_count:
+          type: integer
+          description: Number of completed assignments in the given timeframe
+      required:
+        - contributor
+        - org_id
+        - completed_count
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Audit log entry ID
+        event_type:
+          type: string
+          enum: [cap_update, maintainer_register, api_key_created, api_key_revoked]
+          description: Type of admin event that was audited
+        actor:
+          type: string
+          description: Public key or identifier of the admin who performed the action
+        ip_address:
+          type: string
+          nullable: true
+          description: IP address of the requester
+        resource:
+          type: string
+          nullable: true
+          description: The resource affected (e.g. "governance_caps")
+        previous_value:
+          nullable: true
+          description: Serialised previous value before the change
+        new_value:
+          nullable: true
+          description: Serialised new value after the change
+        metadata:
+          type: object
+          nullable: true
+          description: Additional context (e.g. correlation ID)
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp of the audit event
+      required:
+        - id
+        - event_type
+        - actor
+        - created_at
+
   responses:
     BadRequest:
       description: Bad request - invalid parameters
@@ -638,3 +806,7 @@ tags:
     description: Transaction building
   - name: Events
     description: Event audit trail
+  - name: Leaderboard
+    description: Contributor leaderboard ranked by completed assignments
+  - name: Audit
+    description: Immutable admin audit log
