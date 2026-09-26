@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add `docs/sast.md` documenting Semgrep SAST rules, local execution instructions, CI integration, suppression process, adding new rules, and threat model mapping. (#799)
+
 ---
 
 ## [0.3.0] - 2026-08-28
