@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Persist indexer ledger sync checkpoints to dedicated database table `indexer_checkpoints` with transactional commit and startup recovery fallback (#849).
+
 ---
 
 ## [0.3.0] - 2026-08-28
