@@ -9,6 +9,10 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add document schema section to `docs/ACCESSIBILITY_AUDIT.md` defining severity levels (Critical/High/Medium/Low), status values (Open/In Progress/Fixed/Won't Fix/Deferred), and table field descriptions. (#800)
+- Add re-audit process section to `docs/ACCESSIBILITY_AUDIT.md` covering when to re-audit, tools (axe-core, Playwright, screen reader), how to update tracking table status, and how to add new findings. (#800)
+
 ---
 
 ## [0.3.0] - 2026-08-28
