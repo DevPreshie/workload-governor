@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- **#862 [DB-005] Database ping latency and connection state metrics on health endpoint**: Updated `src/routes/health.ts` to measure `SELECT 1` round-trip latency, expose `latency_ms` and `pool: { active, idle, waiting }` in the health response, return HTTP 503 when DB is unavailable or latency exceeds 2000ms, and promote `db.status` to a 3-state model (`healthy` | `degraded` | `unhealthy`). Updated `backend/src/health.ts` checkDatabase function with matching pool stats and degraded-state logic. Updated `tests/routes/health.test.ts` to assert all new fields.
+
 ---
 
 ## [0.3.0] - 2026-08-28
