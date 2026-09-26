@@ -89,6 +89,7 @@ router.post('/apply', validateBody(applyIssueSchema), async (req: Request, res: 
       if (globalAppsCount >= GLOBAL_CAP) {
         return res.status(429).json({
           error: 'Global application cap reached',
+          code: 'ERR_CAP_EXCEEDED',
           details: { cap_type: 'global', limit: GLOBAL_CAP, current: globalAppsCount },
         });
       }
