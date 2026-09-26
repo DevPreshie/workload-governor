@@ -187,7 +187,39 @@ router.get('/:address', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// Application status values supported by the pagination filter
+// ---------------------------------------------------------------------------
+
+export const APPLICATION_STATUSES = ['pending', 'assigned', 'withdrawn', 'completed'] as const;
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
+/** Encode a numeric row ID as an opaque base64 cursor string. */
+function encodeCursor(id: number): string {
+  return Buffer.from(String(id)).toString('base64url');
+}
+
+/** Decode a cursor back to a numeric row ID. Returns null on invalid input. */
+function decodeCursor(cursor: string): number | null {
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const n = parseInt(decoded, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/contributors/:address/applications
+//
+// Query parameters:
+//   limit   – page size, integer 1–100, default 20
+//   cursor  – opaque pagination cursor from a previous response's next_cursor
+//   status  – filter by application lifecycle status
+//             ('pending' | 'assigned' | 'withdrawn' | 'completed')
+//
+// Response envelope:
+//   { items: ApplicationRow[], next_cursor: string | null, has_more: boolean }
 // ---------------------------------------------------------------------------
 
 router.get('/:address/applications', async (req: Request, res: Response) => {
@@ -198,25 +230,84 @@ router.get('/:address/applications', async (req: Request, res: Response) => {
     return;
   }
 
+  // --- Parse and validate query parameters ---
+
+  // limit
+  const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : 20;
+  if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
+    res.status(400).json({ error: 'limit must be an integer between 1 and 100' });
+    return;
+  }
+  const pageSize = rawLimit;
+
+  // cursor
+  let cursorId: number | null = null;
+  if (req.query.cursor !== undefined && req.query.cursor !== '') {
+    cursorId = decodeCursor(String(req.query.cursor));
+    if (cursorId === null) {
+      res.status(400).json({ error: 'invalid cursor' });
+      return;
+    }
+  }
+
+  // status
+  let statusFilter: ApplicationStatus | null = null;
+  if (req.query.status !== undefined && req.query.status !== '') {
+    const s = String(req.query.status) as ApplicationStatus;
+    if (!APPLICATION_STATUSES.includes(s)) {
+      res.status(400).json({
+        error: `invalid status: must be one of ${APPLICATION_STATUSES.join(', ')}`,
+      });
+      return;
+    }
+    statusFilter = s;
+  }
+
   try {
-    // Select from applications and join issues for title/status
+    // Build the WHERE clause and params array dynamically
+    const whereClauses: string[] = ['contributor = $1'];
+    const queryParams: unknown[] = [address];
+    let paramIdx = 2;
+
+    if (cursorId !== null) {
+      whereClauses.push(`id > $${paramIdx}`);
+      queryParams.push(cursorId);
+      paramIdx++;
+    }
+
+    if (statusFilter !== null) {
+      whereClauses.push(`status = $${paramIdx}`);
+      queryParams.push(statusFilter);
+      paramIdx++;
+    }
+
+    // Fetch pageSize + 1 rows to determine has_more without a COUNT query
+    queryParams.push(pageSize + 1);
+
     const appsResult = await pool.query<{
+      id: number;
       contributor: string;
       org_id: string;
       issue_id: number;
       created_at: string;
+      status: string;
     }>(
-      `SELECT contributor, org_id, issue_id, created_at
+      `SELECT id, contributor, org_id, issue_id, created_at, status
        FROM applications
-       WHERE contributor = $1`,
-      [address],
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY id ASC
+       LIMIT $${paramIdx}`,
+      queryParams,
     );
 
-    // Enrich each row with issue metadata
-    const rows = await Promise.all(
-      appsResult.rows.map(async (r) => {
+    const hasMore = appsResult.rows.length > pageSize;
+    const pageRows = hasMore ? appsResult.rows.slice(0, pageSize) : appsResult.rows;
+
+    // Enrich each row with issue metadata (title + issue-level status)
+    const items = await Promise.all(
+      pageRows.map(async (r) => {
         let title = 'Unknown Issue';
-        let status = 'open';
+        let issueStatus = 'open';
         try {
           const issueResult = await pool.query<{ title: string; status: string }>(
             'SELECT title, status FROM issues WHERE id = $1',
@@ -224,23 +315,32 @@ router.get('/:address/applications', async (req: Request, res: Response) => {
           );
           if (issueResult.rows.length > 0) {
             title = issueResult.rows[0].title;
-            status = issueResult.rows[0].status;
+            issueStatus = issueResult.rows[0].status;
           }
         } catch {
-          // ignore
+          // ignore missing issues table in legacy environments
         }
         return {
+          id: Number(r.id),
           contributor: r.contributor,
           org_id: r.org_id,
           issue_id: Number(r.issue_id),
           created_at: String(r.created_at),
+          status: r.status || 'pending',
           title,
-          status,
+          issue_status: issueStatus,
         };
       }),
     );
 
-    res.json(rows);
+    const lastItem = pageRows[pageRows.length - 1];
+    const nextCursor = hasMore && lastItem ? encodeCursor(Number(lastItem.id)) : null;
+
+    res.json({
+      items,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'internal server error';
     res.status(500).json({ error: msg });
