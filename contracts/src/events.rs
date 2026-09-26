@@ -1,29 +1,7 @@
-//! Event definitions for the Workload Governor contract
+//! Event re-exports for the `contracts/` shim.
+//!
+//! All event emitters are defined in the workspace root crate.
+//! This module re-exports them so that any downstream code referencing
+//! `workload_governor_contracts::events` continues to compile unchanged.
 
-use soroban_sdk::{Address, Env, Symbol};
-
-/// Emit an AssignmentTtlExtended event
-pub fn emit_assignment_ttl_extended(
-    env: &Env,
-    contributor: Address,
-    org_id: Symbol,
-    issue_id: u32,
-) {
-    env.events().publish(
-        ("AssignmentTtlExtended", "v1"),
-        (contributor, org_id, issue_id, env.ledger().timestamp()),
-    );
-}
-
-/// Emit an ApplicationTtlExtended event
-pub fn emit_application_ttl_extended(
-    env: &Env,
-    contributor: Address,
-    org_id: Symbol,
-    issue_id: u32,
-) {
-    env.events().publish(
-        ("ApplicationTtlExtended", "v1"),
-        (contributor, org_id, issue_id, env.ledger().timestamp()),
-    );
-}
+pub use workload_governor::events::*;

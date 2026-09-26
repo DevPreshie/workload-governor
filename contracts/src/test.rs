@@ -1,188 +1,127 @@
+//! Smoke tests for the `contracts/` re-export shim.
+//!
+//! These tests verify that the re-exported `WorkloadGovernor` type compiles and
+//! behaves identically to the root crate.  Full behavioural coverage lives in
+//! `../../src/test.rs`; this file asserts only that the re-export wiring is
+//! correct and the canonical interface is reachable from this package.
+//!
+//! Run with:  cargo test --package contracts --features testutils
+
 #![cfg(test)]
-use super::*;
-use soroban_sdk::{Env, Address, Symbol, Vec};
 
-#[test]
-fn test_single_apply() {
-    let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "test_org");
-    let issue_id = 1;
+use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
 
-    // Initialize organization
-    let org_key = WorkloadGovernor::org_key(org_id.clone());
-    let org = Organization {
-        name: org_id.clone(),
-        issue_count: 10,
-        total_applications: 0,
-    };
-    env.storage().set(&org_key, &org);
+// The re-exported struct and its generated client from the root crate.
+use workload_governor::{WorkloadGovernor, WorkloadGovernorClient};
 
-    // Initialize issue
-    let issue_key = WorkloadGovernor::issue_key(org_id.clone(), issue_id);
-    env.storage().set(&issue_key, &true);
+// ---------------------------------------------------------------------------
+// Test helper
+// ---------------------------------------------------------------------------
 
-    let result = WorkloadGovernor::apply(
-        env.clone(),
-        contributor.clone(),
-        org_id,
-        issue_id,
-    );
-
-    assert!(result.is_ok());
-
-    // Verify application was stored
-    let app = WorkloadGovernor::get_application(env, contributor, issue_id);
-    assert!(app.is_some());
+struct Setup<'a> {
+    env: &'a Env,
+    client: WorkloadGovernorClient<'a>,
 }
 
-#[test]
-fn test_batch_apply_success() {
-    let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "test_org");
-
-    // Initialize organization
-    let org_key = WorkloadGovernor::org_key(org_id.clone());
-    let org = Organization {
-        name: org_id.clone(),
-        issue_count: 10,
-        total_applications: 0,
-    };
-    env.storage().set(&org_key, &org);
-
-    // Initialize issues
-    let mut issue_ids = Vec::new(&env);
-    for i in 1..=5 {
-        issue_ids.push_back(i);
-        let issue_key = WorkloadGovernor::issue_key(org_id.clone(), i);
-        env.storage().set(&issue_key, &true);
+impl<'a> Setup<'a> {
+    fn new(env: &'a Env) -> Self {
+        env.mock_all_auths();
+        let contract_id = env.register(WorkloadGovernor, ());
+        let client = WorkloadGovernorClient::new(env, &contract_id);
+        Setup { env, client }
     }
 
-    let result = WorkloadGovernor::batch_apply(
-        env.clone(),
-        contributor.clone(),
-        org_id,
-        issue_ids,
-    );
-
-    assert!(result.is_ok());
-    let applied = result.unwrap();
-    assert_eq!(applied.len(), 5);
-}
-
-#[test]
-fn test_batch_apply_duplicates_skipped() {
-    let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "test_org");
-
-    // Initialize organization
-    let org_key = WorkloadGovernor::org_key(org_id.clone());
-    let org = Organization {
-        name: org_id.clone(),
-        issue_count: 10,
-        total_applications: 0,
-    };
-    env.storage().set(&org_key, &org);
-
-    // Initialize issue
-    let issue_key = WorkloadGovernor::issue_key(org_id.clone(), 1);
-    env.storage().set(&issue_key, &true);
-
-    // Create batch with duplicate
-    let mut issue_ids = Vec::new(&env);
-    issue_ids.push_back(1);
-    issue_ids.push_back(1);
-    issue_ids.push_back(2); // This doesn't exist, will be skipped
-
-    let result = WorkloadGovernor::batch_apply(
-        env.clone(),
-        contributor.clone(),
-        org_id,
-        issue_ids,
-    );
-
-    assert!(result.is_ok());
-    let applied = result.unwrap();
-    // Should only apply issue 1 once
-    assert_eq!(applied.len(), 1);
-}
-
-#[test]
-fn test_batch_apply_cap() {
-    let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "test_org");
-
-    // Initialize organization
-    let org_key = WorkloadGovernor::org_key(org_id.clone());
-    let org = Organization {
-        name: org_id.clone(),
-        issue_count: 20,
-        total_applications: 0,
-    };
-    env.storage().set(&org_key, &org);
-
-    // Initialize 20 issues
-    let mut issue_ids = Vec::new(&env);
-    for i in 1..=20 {
-        issue_ids.push_back(i);
-        let issue_key = WorkloadGovernor::issue_key(org_id.clone(), i);
-        env.storage().set(&issue_key, &true);
+    fn org(&self, name: &str) -> Symbol {
+        Symbol::new(self.env, name)
     }
+}
 
-    let result = WorkloadGovernor::batch_apply(
-        env.clone(),
-        contributor.clone(),
-        org_id,
-        issue_ids,
-    );
+// ---------------------------------------------------------------------------
+// Smoke tests — re-export wiring
+// ---------------------------------------------------------------------------
 
-    assert!(result.is_ok());
-    let applied = result.unwrap();
-    // Cap is 15, so should only apply 15
-    assert_eq!(applied.len(), 15);
+#[test]
+fn contracts_smoke_initialize() {
+    let env = Env::default();
+    let s = Setup::new(&env);
+    let admin = Address::generate(&env);
+    s.client.initialize(&admin);
+    // Default cap is 15.
+    assert_eq!(s.client.get_global_cap(), 15);
 }
 
 #[test]
-fn test_batch_apply_too_large() {
+fn contracts_smoke_apply_and_query() {
     let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "test_org");
+    let s = Setup::new(&env);
+    let admin = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contributor = Address::generate(&env);
+    let org = s.org("myorg");
 
-    let mut issue_ids = Vec::new(&env);
-    for i in 1..=20 {
-        issue_ids.push_back(i);
-    }
+    s.client.initialize(&admin);
+    s.client.register_maintainer(&admin, &maintainer, &org);
+    s.client.apply_for_issue(&contributor, &org, &42u32);
 
-    let result = WorkloadGovernor::batch_apply(
-        env,
-        contributor,
-        org_id,
-        issue_ids,
-    );
-
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), ApplicationError::BatchTooLarge);
+    assert!(s.client.has_applied(&contributor, &org, &42u32));
+    assert_eq!(s.client.get_global_application_count(&contributor), 1);
 }
 
 #[test]
-fn test_batch_apply_invalid_org() {
+fn contracts_smoke_withdraw() {
     let env = Env::default();
-    let contributor = Address::random(&env);
-    let org_id = Symbol::from_str(&env, "nonexistent_org");
+    let s = Setup::new(&env);
+    let admin = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contributor = Address::generate(&env);
+    let org = s.org("myorg");
 
-    let mut issue_ids = Vec::new(&env);
-    issue_ids.push_back(1);
+    s.client.initialize(&admin);
+    s.client.register_maintainer(&admin, &maintainer, &org);
+    s.client.apply_for_issue(&contributor, &org, &7u32);
+    s.client.withdraw_application(&contributor, &org, &7u32);
 
-    let result = WorkloadGovernor::batch_apply(
-        env,
-        contributor,
-        org_id,
-        issue_ids,
-    );
+    assert!(!s.client.has_applied(&contributor, &org, &7u32));
+    assert_eq!(s.client.get_global_application_count(&contributor), 0);
+}
 
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), ApplicationError::OrganizationNotFound);
+#[test]
+fn contracts_smoke_assign_complete() {
+    let env = Env::default();
+    let s = Setup::new(&env);
+    let admin = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contributor = Address::generate(&env);
+    let org = s.org("myorg");
+
+    s.client.initialize(&admin);
+    s.client.register_maintainer(&admin, &maintainer, &org);
+    s.client.apply_for_issue(&contributor, &org, &99u32);
+    s.client.assign_issue(&maintainer, &contributor, &org, &99u32);
+
+    assert!(s.client.is_assigned(&contributor, &org, &99u32));
+    assert_eq!(s.client.get_org_assignment_count(&contributor, &org), 1);
+
+    s.client.complete_assignment(&maintainer, &contributor, &org, &99u32);
+    assert!(!s.client.is_assigned(&contributor, &org, &99u32));
+    assert_eq!(s.client.get_org_assignment_count(&contributor, &org), 0);
+}
+
+#[test]
+fn contracts_smoke_assign_revoke() {
+    let env = Env::default();
+    let s = Setup::new(&env);
+    let admin = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contributor = Address::generate(&env);
+    let org = s.org("myorg");
+
+    s.client.initialize(&admin);
+    s.client.register_maintainer(&admin, &maintainer, &org);
+    s.client.apply_for_issue(&contributor, &org, &55u32);
+    s.client.assign_issue(&maintainer, &contributor, &org, &55u32);
+    s.client.revoke_assignment(&maintainer, &contributor, &org, &55u32);
+
+    assert!(!s.client.is_assigned(&contributor, &org, &55u32));
+    assert_eq!(s.client.get_org_assignment_count(&contributor, &org), 0);
 }

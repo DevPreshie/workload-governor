@@ -10,7 +10,7 @@ use soroban_sdk::{symbol_short, Address, Env, Symbol};
 ///
 /// topics: `(symbol_short!("init"), admin)`
 /// data:   `(admin,)`
-pub(crate) fn emit_initialized(env: &Env, admin: &Address) {
+pub fn emit_initialized(env: &Env, admin: &Address) {
     let topics = (symbol_short!("init"), admin.clone());
     let data = (admin.clone(),);
     env.events().publish(topics, data);
@@ -20,7 +20,7 @@ pub(crate) fn emit_initialized(env: &Env, admin: &Address) {
 ///
 /// topics: `(symbol_short!("maint_reg"), admin)`
 /// data:   `(maintainer, org_id)`
-pub(crate) fn emit_maintainer_registered(
+pub fn emit_maintainer_registered(
     env: &Env,
     admin: &Address,
     maintainer: &Address,
@@ -35,7 +35,7 @@ pub(crate) fn emit_maintainer_registered(
 ///
 /// topics: `(symbol_short!("app_sub"), contributor)`
 /// data:   `(contributor, org_id, issue_id)`
-pub(crate) fn emit_application_submitted(
+pub fn emit_application_submitted(
     env: &Env,
     contributor: &Address,
     org_id: &Symbol,
@@ -50,7 +50,7 @@ pub(crate) fn emit_application_submitted(
 ///
 /// topics: `(symbol_short!("app_wdw"), contributor)`
 /// data:   `(contributor, org_id, issue_id)`
-pub(crate) fn emit_application_withdrawn(
+pub fn emit_application_withdrawn(
     env: &Env,
     contributor: &Address,
     org_id: &Symbol,
@@ -65,7 +65,7 @@ pub(crate) fn emit_application_withdrawn(
 ///
 /// topics: `(symbol_short!("assigned"), maintainer)`
 /// data:   `(maintainer, contributor, org_id, issue_id)`
-pub(crate) fn emit_issue_assigned(
+pub fn emit_issue_assigned(
     env: &Env,
     maintainer: &Address,
     contributor: &Address,
@@ -81,7 +81,7 @@ pub(crate) fn emit_issue_assigned(
 ///
 /// topics: `(symbol_short!("completed"), maintainer)`
 /// data:   `(maintainer, contributor, org_id, issue_id)`
-pub(crate) fn emit_assignment_completed(
+pub fn emit_assignment_completed(
     env: &Env,
     maintainer: &Address,
     contributor: &Address,
@@ -97,7 +97,7 @@ pub(crate) fn emit_assignment_completed(
 ///
 /// topics: `(symbol_short!("revoked"), maintainer)`
 /// data:   `(maintainer, contributor, org_id, issue_id)`
-pub(crate) fn emit_assignment_revoked(
+pub fn emit_assignment_revoked(
     env: &Env,
     maintainer: &Address,
     contributor: &Address,
@@ -117,7 +117,7 @@ pub(crate) fn emit_assignment_revoked(
 ///
 /// topics: `(symbol_short!("mig_done"), admin)`
 /// data:   `(entries_migrated: u32,)`
-pub(crate) fn emit_migration_completed(env: &Env, admin: &Address, entries_migrated: u32) {
+pub fn emit_migration_completed(env: &Env, admin: &Address, entries_migrated: u32) {
     let topics = (symbol_short!("mig_done"), admin.clone());
     let data = (entries_migrated,);
     env.events().publish(topics, data);
@@ -131,7 +131,7 @@ pub(crate) fn emit_migration_completed(env: &Env, admin: &Address, entries_migra
 ///
 /// topics: `(symbol_short!("ms_set"), admin)`
 /// data:   `(threshold: u32, signer_count: u32)`
-pub(crate) fn emit_admin_threshold_set(env: &Env, admin: &Address, threshold: u32, signer_count: u32) {
+pub fn emit_admin_threshold_set(env: &Env, admin: &Address, threshold: u32, signer_count: u32) {
     let topics = (symbol_short!("ms_set"), admin.clone());
     let data = (threshold, signer_count);
     env.events().publish(topics, data);
@@ -145,7 +145,7 @@ pub(crate) fn emit_admin_threshold_set(env: &Env, admin: &Address, threshold: u3
 ///
 /// topics: `(symbol_short!("cap_prop"), proposer)`
 /// data:   `(proposal_id: u32, new_global_cap: u32)`
-pub(crate) fn emit_cap_proposed(
+pub fn emit_cap_proposed(
     env: &Env,
     proposer: &Address,
     proposal_id: u32,
@@ -160,7 +160,7 @@ pub(crate) fn emit_cap_proposed(
 ///
 /// topics: `(symbol_short!("cap_vote"), voter)`
 /// data:   `(proposal_id: u32, approve: bool)`
-pub(crate) fn emit_cap_voted(env: &Env, voter: &Address, proposal_id: u32, approve: bool) {
+pub fn emit_cap_voted(env: &Env, voter: &Address, proposal_id: u32, approve: bool) {
     let topics = (symbol_short!("cap_vote"), voter.clone());
     let data = (proposal_id, approve);
     env.events().publish(topics, data);
@@ -170,7 +170,7 @@ pub(crate) fn emit_cap_voted(env: &Env, voter: &Address, proposal_id: u32, appro
 ///
 /// topics: `(symbol_short!("cap_exec"), executor)`
 /// data:   `(proposal_id: u32, new_global_cap: u32)`
-pub(crate) fn emit_cap_changed(
+pub fn emit_cap_changed(
     env: &Env,
     executor: &Address,
     proposal_id: u32,

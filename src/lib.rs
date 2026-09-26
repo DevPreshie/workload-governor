@@ -9,8 +9,8 @@
 
 #![no_std]
 
-mod errors;
-mod events;
+pub mod errors;
+pub mod events;
 mod storage;
 
 #[cfg(test)]
