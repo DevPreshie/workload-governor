@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Instrument Horizon and Soroban RPC calls in `backend/src/HorizonService.ts` with OpenTelemetry spans and collector service in `docker-compose.yml` (#850).
+
 ---
 
 ## [0.3.0] - 2026-08-28
