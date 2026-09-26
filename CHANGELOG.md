@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add ARIA live region to `ContributorProfile.tsx` for real-time workload cap auditory announcements (#851).
+
 ---
 
 ## [0.3.0] - 2026-08-28
