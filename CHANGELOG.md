@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Changed
+- **#861 [DB-004] SQL query dialect compatibility audit between SQLite (test) and PostgreSQL (prod)**: Audited all raw SQL queries in `backend/src/` and `src/services/`. No `INSERT OR IGNORE` or raw SQLite date functions found — existing code is already dialect-sound for its targets. Added SQL dialect audit documentation comments to `backend/src/db.ts`, `backend/src/github.ts`, and `src/services/issueService.ts` cataloguing all PostgreSQL-specific constructs with justifications. Added a `SQL dialect audit` CI step to `.github/workflows/backend-integration.yml` that fails if `INSERT OR IGNORE` or `date('now')` are introduced in future. CI workflow comment updated to document PostgreSQL-only test strategy.
+
 ---
 
 ## [0.3.0] - 2026-08-28
