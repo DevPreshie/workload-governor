@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Changed
+- **#864 [INFRA-002] Align ECS task CPU/memory with container definitions**: Updated `terraform/modules/compute/main.tf` to expose `cpu` and `memory` as configurable variables via `variables.tf`, eliminating 50% stranded Fargate capacity. Container-level CPU/memory reservations now exactly match task-level allocations. Per-environment defaults are set via `terraform.tfvars.example` (staging: 512 CPU / 1024 MB; production: 1024 CPU / 2048 MB). Autoscaling metric thresholds in `infra/ecs-autoscaling.tf` are now driven by `cpu_target_utilization` and `memory_target_utilization` variables, with a new memory tracking policy and alarm added.
+
 ---
 
 ## [0.3.0] - 2026-08-28
