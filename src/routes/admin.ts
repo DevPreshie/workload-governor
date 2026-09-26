@@ -13,6 +13,8 @@ import {
   DeregisterMaintainerBody,
 } from '../schemas/admin';
 import { registerOrgSchema } from '../schemas/orgs';
+import redis from '../services/redis';
+import { DLQ_KEY, DlqEntry, dispatchToWebhook } from '../services/webhook-dispatcher';
 
 const router = Router();
 const soroban = new SorobanService();
@@ -439,6 +441,115 @@ router.post('/consistency/remediate', signatureAuthMiddleware, async (req: Reque
       stack: err instanceof Error ? err.stack : undefined,
     });
     res.status(500).json({ error: msg });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/webhooks/dlq — Inspect messages in the Redis dead-letter queue
+// GET /api/v1/admin/webhooks/dlq — (alias for OpenAPI v1 path)
+//
+// Returns up to 100 most-recent DLQ entries.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/webhooks/dlq', signatureAuthMiddleware, async (req: Request, res: Response) => {
+  const adminReq = req as Request & { adminAddress: string };
+
+  try {
+    const rawEntries = await redis.lrange(DLQ_KEY, 0, 99);
+    const entries: DlqEntry[] = rawEntries.map((raw: string) => {
+      try {
+        return JSON.parse(raw) as DlqEntry;
+      } catch {
+        return { webhook_id: 0, url: '', payload: {} as DlqEntry['payload'], last_error: raw, attempts: 0, failed_at: '' };
+      }
+    });
+
+    logger.info({
+      correlationId: adminReq.correlationId,
+      message: 'DLQ inspected',
+      count: entries.length,
+    });
+
+    return res.json({
+      queue: DLQ_KEY,
+      total: entries.length,
+      entries,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'internal error';
+    logger.error({ correlationId: adminReq.correlationId, error: msg });
+    return res.status(500).json({ error: msg });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/admin/webhooks/dlq/replay/:index
+//
+// Replays the DLQ entry at the given 0-based index (LINDEX).
+// The entry is NOT removed from the queue on replay — the admin must manually
+// delete it once satisfied the downstream endpoint is healthy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.post('/webhooks/dlq/replay/:index', signatureAuthMiddleware, async (req: Request, res: Response) => {
+  const adminReq = req as Request & { adminAddress: string };
+  const index = parseInt(req.params.index, 10);
+
+  if (isNaN(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+
+  try {
+    const raw = await redis.lindex(DLQ_KEY, index);
+    if (!raw) {
+      return res.status(404).json({ error: `No DLQ entry at index ${index}` });
+    }
+
+    let entry: DlqEntry;
+    try {
+      entry = JSON.parse(raw) as DlqEntry;
+    } catch {
+      return res.status(422).json({ error: 'DLQ entry is not valid JSON' });
+    }
+
+    // Retrieve the webhook secret from the database for re-signing
+    const result = await pool.query<{ secret: string }>(
+      'SELECT secret FROM org_webhooks WHERE id = $1',
+      [entry.webhook_id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: `Webhook #${entry.webhook_id} not found — it may have been deleted` });
+    }
+
+    const { secret } = result.rows[0];
+
+    logger.info({
+      correlationId: adminReq.correlationId,
+      message: 'Replaying DLQ entry',
+      webhookId: entry.webhook_id,
+      url: entry.url,
+      index,
+    });
+
+    // Dispatch asynchronously — do not await so the HTTP response returns immediately
+    dispatchToWebhook(entry.webhook_id, entry.url, secret, entry.payload).catch((err) => {
+      logger.error({
+        correlationId: adminReq.correlationId,
+        message: 'DLQ replay dispatch failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    return res.json({
+      message: 'Replay dispatched',
+      webhook_id: entry.webhook_id,
+      url: entry.url,
+      index,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'internal error';
+    logger.error({ correlationId: adminReq.correlationId, error: msg });
+    return res.status(500).json({ error: msg });
   }
 });
 
