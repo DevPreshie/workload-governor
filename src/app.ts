@@ -11,6 +11,7 @@ import webhooksRouter from './routes/webhooks';
 import eventsRouter from './routes/events';
 import { globalLimiter, walletLimiter } from './middleware/rate-limit';
 import { apiKeyAuth } from './middleware/api-key-auth';
+import { idempotencyMiddleware } from './middleware/idempotency';
 import { correlationIdMiddleware } from './logger';
 import { errorHandler } from './errors';
 import { setupSwagger } from './swagger';
@@ -49,7 +50,7 @@ export function createApp(): express.Application {
   app.use('/api/contributors', contributorsRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/api-keys', apiKeysRouter);
-  app.use('/api/transactions', walletLimiter, transactionsRouter);
+  app.use('/api/transactions', walletLimiter, idempotencyMiddleware, transactionsRouter);
   app.use('/api/events', eventsRouter);
   app.use('/webhooks', webhooksRouter);
 
