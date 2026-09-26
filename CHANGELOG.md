@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Implement keyboard Escape key dismissal and focus restoration upon modal dismissal or unmount in `TxConfirmModal` (#852).
+
 ---
 
 ## [0.3.0] - 2026-08-28

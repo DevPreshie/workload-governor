@@ -50,7 +50,9 @@ export default function TxConfirmModal({ modal }: Props) {
   // ── Focus management ────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
-      previousFocus.current = document.activeElement as HTMLElement;
+      if (!previousFocus.current) {
+        previousFocus.current = document.activeElement as HTMLElement;
+      }
       document.body.style.overflow = 'hidden';
       requestAnimationFrame(() => {
         const first = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE)[0];
@@ -58,10 +60,17 @@ export default function TxConfirmModal({ modal }: Props) {
       });
     } else {
       document.body.style.overflow = '';
-      previousFocus.current?.focus();
+      if (previousFocus.current) {
+        previousFocus.current.focus();
+        previousFocus.current = null;
+      }
     }
     return () => {
       document.body.style.overflow = '';
+      if (previousFocus.current) {
+        previousFocus.current.focus();
+        previousFocus.current = null;
+      }
     };
   }, [isOpen]);
 
@@ -69,7 +78,10 @@ export default function TxConfirmModal({ modal }: Props) {
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && !isLoading) _reject();
+      if (e.key === 'Escape' && !isLoading) {
+        e.preventDefault();
+        _reject();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
