@@ -272,6 +272,8 @@ A maintainer tried to assign an issue to a contributor who already holds 4 activ
 
 `assign_issue` reads the `("o_asgn", contributor, org_id)` persistent counter. If `asgn_count >= ORG_ASSIGNMENT_LIMIT` (4) the call panics. This is checked before the `AlreadyAssigned` guard, so even if the specific issue is not yet assigned, the limit check takes priority.
 
+Note: the effective cap may differ from the default of 4 if a per-org cap has been set via `set_org_cap`. The contract reads `("o_cap", org_id)` and falls back to `ORG_ASSIGNMENT_LIMIT` if absent. See [docs/storage-design.md — Section 7: Per-Org Assignment Cap](storage-design.md#7--per-org-assignment-cap) for key details and the upgrade path for raising the cap.
+
 **Example Scenario**
 
 Bob has 4 active assignments in `rust_foundation`. A maintainer tries to give him a fifth:

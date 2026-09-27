@@ -140,6 +140,46 @@ The contract address does not change. All storage entries are preserved.
 
 ---
 
+## Org Assignment Cap Management
+
+The default maximum number of active assignments a contributor may hold in a single organisation is `4` (`ORG_ASSIGNMENT_LIMIT`). The admin can override this per-org by writing a value to the `("o_cap", org_id)` persistent storage key via `set_org_cap`.
+
+For the full storage design of this key — including prefix collision proof, default fallback behaviour, and the interaction with `OrgAssignmentLimitReached` (error 7) — see [docs/storage-design.md — Section 7: Per-Org Assignment Cap](storage-design.md#7--per-org-assignment-cap).
+
+### Raise the cap for an organisation
+
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --network testnet \
+  --source <admin-account> \
+  -- set_org_cap \
+  --admin <ADMIN_ADDRESS> \
+  --org_id <ORG_ID> \
+  --cap <NEW_CAP>
+```
+
+Valid cap values: `1` to `20`. Values outside this range return `InvalidOrgCap` (code 16).
+
+### Query the current cap
+
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --network testnet \
+  -- get_org_cap \
+  --org_id <ORG_ID>
+# Returns the stored cap, or 4 (default) if no custom cap has been set.
+```
+
+### Emergency cap increase
+
+For urgent production cap increases driven by a governance vote, follow [docs/runbooks/cap-emergency-increase.md](runbooks/cap-emergency-increase.md).
+
+---
+
+---
+
 ## Error Reference
 
 For the full list of error codes and their resolutions, see [docs/error-reference.md](error-reference.md).
