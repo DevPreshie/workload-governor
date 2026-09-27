@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { createApp } from './app';
 import { migrate } from './db';
-import { startEventIndexer } from './eventIndexer';
+import { startEventIndexer, registerShutdownHandlers } from './eventIndexer';
 
 const PORT = process.env.PORT ?? 3000;
 
@@ -16,8 +16,12 @@ migrate()
       console.error('Failed to start event indexer', err);
     });
 
+    // Register SIGTERM/SIGINT handlers to complete the current ledger batch,
+    // release the Redis leader lock, and close the DB pool cleanly.
+    registerShutdownHandlers();
+
     process.on('SIGTERM', () => {
-      console.log('SIGTERM received, shutting down gracefully');
+      console.log('SIGTERM received, closing HTTP server');
       server.close();
     });
   })
