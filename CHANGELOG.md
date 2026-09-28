@@ -9,6 +9,14 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add keyboard arrow navigation to OrgSelector dropdown. (#853)
+- Add responsive card view for AuditLogPage on mobile viewports. (#855)
+- Add client ErrorBoundary error reporting hook and user retry action. (#856)
+
+### Fixed
+- Fix horizontal scrollbar flicker during SlideOutRow animation on mobile. (#854)
+
 ---
 
 ## [0.3.0] - 2026-08-28
