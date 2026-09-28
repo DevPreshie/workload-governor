@@ -9,6 +9,14 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add `PodDisruptionBudget` template to vesting-backend Helm chart. (#869)
+- Add `startupProbe` and exposed probe thresholds in vesting-backend Helm chart. (#872)
+- Add Gitleaks secret scanning CI job with custom rules for Stellar secret seeds and API keys. (#877)
+
+### Changed
+- Enable ElastiCache Redis multi-AZ and automatic failover in Terraform cache module. (#868)
+
 ---
 
 ## [0.3.0] - 2026-08-28

@@ -106,13 +106,32 @@ autoscaling:
   # -- Target memory utilisation percentage (requires metrics-server)
   targetMemoryUtilizationPercentage: 80
 
+# ─── Pod Disruption Budget ───────────────────────────────────────────────────
+podDisruptionBudget:
+  # -- Enable PodDisruptionBudget (guarantees service availability during node drains)
+  enabled: true
+  # -- Minimum number of available pods
+  minAvailable: 1
+  # -- Maximum number of unavailable pods (mutually exclusive with minAvailable)
+  maxUnavailable: ""
+
 # ─── Probes ──────────────────────────────────────────────────────────────────
+startupProbe:
+  httpGet:
+    path: /api/v1/health
+    port: 3000
+  initialDelaySeconds: 0
+  periodSeconds: 2
+  timeoutSeconds: 1
+  failureThreshold: 30
+
 livenessProbe:
   httpGet:
     path: /health
     port: 3000
-  initialDelaySeconds: 15
-  periodSeconds: 20
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 1
   failureThreshold: 3
 
 readinessProbe:
@@ -121,6 +140,7 @@ readinessProbe:
     port: 3000
   initialDelaySeconds: 5
   periodSeconds: 10
+  timeoutSeconds: 1
   failureThreshold: 3
 
 # ─── Application config (ConfigMap) ─────────────────────────────────────────
