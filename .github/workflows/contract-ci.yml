@@ -90,6 +90,44 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
+          name: mutation-report
+          path: mutants.out/mutation-report.html
+          retention-days: 7
+
+  # ── 3. Build WASM & Size Budget Assertion ───────────────────────────────
+  build-wasm:
+    name: Build WASM & Size Budget Check
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable with wasm targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none, wasm32-unknown-unknown
+
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Build WASM binaries
+        run: |
+          cargo build --target wasm32v1-none --release
+          cargo build --target wasm32-unknown-unknown --release
+
+      - name: Assert WASM Binary Size Budget (< 64 KB)
+        run: bash scripts/test-contract.sh --check-size
+
+      - name: Upload unoptimized WASM
+        uses: actions/upload-artifact@v7
+        with:
           name: workload-governor-wasm-unoptimized
           path: target/wasm32v1-none/release/workload_governor.wasm
           retention-days: 7

@@ -76,8 +76,6 @@ Include:
 - Alternatives you considered
 - Whether it requires a contract upgrade (ABI change = MAJOR semver bump)
 
----
-
 ## Development Workflow
 
 1. Sync your fork: `git fetch upstream && git rebase upstream/main`.
@@ -85,6 +83,35 @@ Include:
 3. Make your changes — keep commits focused and atomic.
 4. Update `CHANGELOG.md` under the `[Unreleased]` section (see below).
 5. Open a pull request targeting `main`.
+
+---
+
+## Development Commands (Makefile)
+
+Use the root `Makefile` targets to manage setup, builds, tests, and formatting:
+
+```bash
+# First-time setup (dependencies across contract, backend, and frontend)
+make setup
+
+# Build all components
+make build-all
+
+# Run all test suites locally
+make test-all
+
+# Run contract tests and verify key collision freedom
+make test-contract
+
+# Run linters and formatters
+make lint-all
+
+# Launch local backend and frontend development servers
+make dev
+
+# Display all available targets and descriptions
+make help
+```
 
 ---
 

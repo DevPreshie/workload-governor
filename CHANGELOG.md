@@ -9,6 +9,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add Horizon and Soroban RPC node migration runbook `docs/runbooks/horizon-migration.md` and index `docs/runbooks/README.md`. (#890)
+- Add Soroban Symbol 64-bit hash collision and namespace overlap detection in `scripts/check-key-collisions.sh`. (#894)
+- Add contract WASM binary size budget assertion (< 64 KB) in `scripts/test-contract.sh` and CI. (#895)
+- Standardize developer and testing targets in root `Makefile` with dynamic `make help`. (#896)
+
 ---
 
 ## [0.3.0] - 2026-08-28
