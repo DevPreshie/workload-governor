@@ -96,6 +96,7 @@ Key design decisions are documented in [docs/adr/](docs/adr/).
 | [ADR-003](docs/adr/ADR-003-temporary-storage-applications.md) | Use Temporary Storage for Pending Applications | Accepted |
 | [ADR-004](docs/adr/ADR-004-postgresql-over-sqlite.md) | Use PostgreSQL Instead of SQLite for the Backend Database | Accepted |
 | [ADR-005](docs/adr/ADR-005-nextjs-frontend.md) | Use Next.js for the Frontend | Accepted |
+| [ADR-006](docs/adr/ADR-006-two-step-admin-transfer.md) | Use a Two-Step Propose/Accept Pattern for Admin Transfer | Accepted |
 
 ## Operations
 
