@@ -9,6 +9,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add npm and vitest cache step in frontend CI workflow to accelerate test suites and lint runs. (#876)
+- Add 500 VU spike scenario and latency assertion thresholds to k6 staging load test suite. (#881)
+- Add Architecture Decision Record ADR-008 for multisig governance architecture. (#886)
+- Add WASM SHA256 checksum calculation, verification checklist, and install steps in contract upgrade runbook. (#887)
+
 ---
 
 ## [0.3.0] - 2026-08-28
