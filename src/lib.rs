@@ -443,6 +443,7 @@ impl WorkloadGovernor {
         org_id: Symbol,
         issue_id: u32,
     ) {
+        // ── CHECKS ────────────────────────────────────────────────────────────
         storage::require_initialized(&env, &ContractError::NotInitialized);
         maintainer.require_auth();
         if !storage::is_maintainer(&env, &maintainer, &org_id) {
@@ -451,24 +452,22 @@ impl WorkloadGovernor {
         if !storage::has_assignment(&env, &org_id, issue_id, &contributor) {
             panic_with_error!(env, ContractError::AssignmentNotFound);
         }
-        // Debug assertion: assignment exists so counter must be ≥ 1.
-        // A counter of 0 here indicates storage corruption (CounterInconsistency).
-        #[cfg(debug_assertions)]
-        {
-            let counter = storage::get_org_assignment_count(&env, &contributor, &org_id);
-            if counter == 0 {
-                panic_with_error!(env, ContractError::CounterInconsistency);
-            }
-        }
-        storage::remove_assignment(&env, &org_id, issue_id, &contributor);
+        // Read counter once during the check phase and validate consistency.
+        // Assignment exists so counter must be ≥ 1; 0 indicates storage corruption.
         let asgn_count = storage::get_org_assignment_count(&env, &contributor, &org_id);
-        let new_count = asgn_count.saturating_sub(1);
+        if asgn_count == 0 {
+            panic_with_error!(env, ContractError::CounterInconsistency);
+        }
+        // ── EFFECTS ───────────────────────────────────────────────────────────
+        storage::remove_assignment(&env, &org_id, issue_id, &contributor);
+        let new_count = asgn_count - 1;
         if new_count == 0 {
             storage::remove_org_assignment_count(&env, &contributor, &org_id);
         } else {
             storage::set_org_assignment_count(&env, &contributor, &org_id, new_count);
         }
         storage::bump_instance(&env);
+        // ── INTERACTIONS ──────────────────────────────────────────────────────
         events::emit_assignment_completed(&env, &maintainer, &contributor, &org_id, issue_id);
     }
 
@@ -501,6 +500,7 @@ impl WorkloadGovernor {
         org_id: Symbol,
         issue_id: u32,
     ) {
+        // ── CHECKS ────────────────────────────────────────────────────────────
         storage::require_initialized(&env, &ContractError::NotInitialized);
         maintainer.require_auth();
         if !storage::is_maintainer(&env, &maintainer, &org_id) {
@@ -509,11 +509,14 @@ impl WorkloadGovernor {
         if !storage::has_assignment(&env, &org_id, issue_id, &contributor) {
             panic_with_error!(env, ContractError::AssignmentNotFound);
         }
-        storage::remove_assignment(&env, &org_id, issue_id, &contributor);
+        // Read counter and validate consistency before any state mutation.
+        // Assignment exists so counter must be ≥ 1; 0 indicates storage corruption.
         let asgn_count = storage::get_org_assignment_count(&env, &contributor, &org_id);
         if asgn_count == 0 {
             panic_with_error!(env, ContractError::CounterInconsistency);
         }
+        // ── EFFECTS ───────────────────────────────────────────────────────────
+        storage::remove_assignment(&env, &org_id, issue_id, &contributor);
         let new_count = asgn_count - 1;
         if new_count == 0 {
             storage::remove_org_assignment_count(&env, &contributor, &org_id);
@@ -521,6 +524,7 @@ impl WorkloadGovernor {
             storage::set_org_assignment_count(&env, &contributor, &org_id, new_count);
         }
         storage::bump_instance(&env);
+        // ── INTERACTIONS ──────────────────────────────────────────────────────
         events::emit_assignment_revoked(&env, &maintainer, &contributor, &org_id, issue_id);
     }
 
