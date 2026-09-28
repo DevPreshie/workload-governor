@@ -9,6 +9,14 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add automated release workflow for contract WASM binary packaging and SHA256 checksums. (#878)
+- Configure grouped Dependabot updates for cargo, npm, and GitHub Actions ecosystems. (#879)
+- Mount `/tmp` ephemeral emptyDir volume for hardened read-only filesystem containers. (#870)
+
+### Changed
+- Optimize root Dockerfile with multi-stage build, minimal Alpine runner, and non-root node user. (#873)
+
 ---
 
 ## [0.3.0] - 2026-08-28
