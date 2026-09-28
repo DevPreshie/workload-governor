@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add `scripts/check-api-docs-sync.js` and a `docs-sync` CI job that fail when an `openapi.yaml` operation is missing from `docs/api-reference.md`; document the 16 missing spec endpoints and the endpoint-change workflow in `docs/contributing.md`. (#790)
+
 ---
 
 ## [0.3.0] - 2026-08-28
