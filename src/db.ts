@@ -37,9 +37,9 @@ export function getPool(): Pool {
       // DB_POOL_MIN: minimum connections kept alive (default 2)
       // DB_POOL_MAX: maximum connections allowed (default 10)
       min: parseInt(process.env['DB_POOL_MIN'] ?? '2', 10),
-      max: parseInt(process.env['DB_POOL_MAX'] ?? '10', 10),
+      max: parseInt(process.env['DB_POOL_MAX'] ?? '20', 10),
       idleTimeoutMillis: parseInt(process.env['DB_IDLE_TIMEOUT'] ?? '30000', 10),
-      connectionTimeoutMillis: parseInt(process.env['DB_CONNECTION_TIMEOUT'] ?? '5000', 10),
+      connectionTimeoutMillis: parseInt(process.env['DB_CONNECTION_TIMEOUT'] ?? process.env['DB_ACQUIRE_TIMEOUT'] ?? '10000', 10),
     });
 
     // Log and alert on unexpected idle-client errors (fixes issue #561)
@@ -146,6 +146,7 @@ export async function migrate(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_events_org_id ON events(org_id);
     CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_events_org_created ON events(org_id, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS issues (
       id         SERIAL PRIMARY KEY,

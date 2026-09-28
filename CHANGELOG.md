@@ -9,6 +9,14 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add high-contrast color tokens for WCAG AAA compliance under `prefers-contrast: more`. (#857)
+- Add composite index on `events (org_id, created_at DESC)` in migration `3_add_events_org_created_idx.js`. (#858)
+- Add reversible `down()` migration in `2_event_deduplication.js` and migration idempotency tests. (#859)
+
+### Changed
+- Configure connection pool leak protection, acquire timeouts, and idle pruning in database connection pool. (#860)
+
 ---
 
 ## [0.3.0] - 2026-08-28
