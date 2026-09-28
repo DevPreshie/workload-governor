@@ -9,6 +9,9 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add ADR-006 documenting the two-step `propose_admin` / `accept_admin` admin transfer pattern, with cross-links from the ADR index, README, admin guide, and key rotation runbook. (#791)
+
 ---
 
 ## [0.3.0] - 2026-08-28
