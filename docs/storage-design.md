@@ -510,3 +510,31 @@ Assume 100 contributors each submit 3 applications, 30 are assigned, 30 complete
 - Do not let the contract instance TTL lapse — bump it regularly or rely on the `bump_instance` call made on every state-changing transaction.
 - For orgs with > 5 000 contributors, raise `APP_TTL_LEDGERS` only if the Wave duration requires it — a longer TTL multiplies the temporary rent cost proportionally.
 - Monitor the `("o_cap", org_id)` key: each distinct org adds one persistent entry of ~35 bytes (negligible unless there are thousands of orgs).
+
+---
+
+## Off-chain Redis Cache Architecture
+
+In addition to on-chain Soroban storage, WorkloadGovernor uses an off-chain Redis caching layer (`src/services/redis.ts`) to serve high-throughput read traffic, enforce transaction idempotency, and provide distributed synchronization across backend instances.
+
+### Key Namespaces and TTL Policies
+
+| Key Pattern | Description | TTL | Invalidation Trigger |
+|-------------|-------------|-----|----------------------|
+| `idemp:<key>` | Idempotency token storage preventing double execution | 86,400 s (24 h) | Natural TTL expiry |
+| `lock:<resource>` | Distributed Redlock mutex for critical sections | 30 s | Explicit release on operation completion |
+| `cache:org:<org_id>` | Cached organization metadata and active issue capacities | 300 s (5 min) | Contract events (`applied`, `assigned`, `completed`) |
+| `cache:contributor:<address>` | Cached global application count and active assignment list | 60 s (1 min) | Contract events (`applied`, `withdrawn`, `revoked`) |
+
+### Cache Invalidation Flow
+
+When state changes on-chain, Soroban contract events are ingested by the off-chain indexer service, which publishes cache eviction messages to purge stale entries:
+
+```mermaid
+flowchart LR
+    A["Soroban Smart Contract"] -->|"Emit Event"| B["Event Indexer Service"]
+    B -->|"Parse Event"| C["Redis Cache Service"]
+    C -->|"DEL cache:org:<org_id>"| D["Organization Cache"]
+    C -->|"DEL cache:contributor:<address>"| E["Contributor Cache"]
+```
+

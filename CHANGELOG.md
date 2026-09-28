@@ -9,6 +9,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Added
+- Add pre-flight Horizon RPC and deployer balance checks in `testnet-smoke.sh`. (#882)
+- Add contract event deserialization test cases for malformed/corrupted payloads. (#883)
+- Document Redis key naming schemes and cache eviction triggers in `docs/storage-design.md`. (#889)
+- Add comprehensive API error code reference table to `docs/api-key-guide.md`. (#891)
+
 ---
 
 ## [0.3.0] - 2026-08-28
