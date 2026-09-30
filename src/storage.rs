@@ -531,3 +531,39 @@ pub(crate) fn set_global_cap_override(env: &Env, new_cap: u32) {
         .persistent()
         .set(&global_cap_override_key(), &new_cap);
 }
+
+// ---------------------------------------------------------------------------
+// #828 SC-003 — Persistent storage: Admin action nonce
+// ---------------------------------------------------------------------------
+//
+// Key: `symbol_short!("adm_nc")`  →  `u32`
+//
+// A monotonic counter incremented on every privileged governance action.
+// Including the current nonce in the auth digest that `require_admin_auth`
+// verifies prevents authorisation replay across ledger forks or re-orgs.
+
+fn admin_nonce_key() -> Symbol {
+    symbol_short!("adm_nc")
+}
+
+/// Returns the current admin nonce (0 before the first privileged call).
+pub(crate) fn get_admin_nonce(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get::<_, u32>(&admin_nonce_key())
+        .unwrap_or(0)
+}
+
+/// Increments and persists the admin nonce, returning the **new** value.
+///
+/// Called at the start of every privileged admin operation so that:
+/// 1. The digest includes the pre-increment nonce value (replay protection).
+/// 2. Any previously collected signatures are invalidated for future calls.
+pub(crate) fn increment_admin_nonce(env: &Env) -> u32 {
+    let current = get_admin_nonce(env);
+    let next = current.saturating_add(1);
+    env.storage()
+        .persistent()
+        .set(&admin_nonce_key(), &next);
+    next
+}
