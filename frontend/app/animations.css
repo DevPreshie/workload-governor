@@ -23,6 +23,12 @@
   to { transform: rotate(360deg); }
 }
 
+/* #552 — Skeleton shimmer for IssueCardSkeleton loading placeholders */
+@keyframes shimmer {
+  from { background-position: -200% center; }
+  to   { background-position:  200% center; }
+}
+
 /* Utility classes */
 .fade-in {
   animation: fadeIn 300ms ease-out both;
@@ -34,6 +40,18 @@
 
 .modal-slide-in {
   animation: modalSlideIn 220ms ease-out both;
+}
+
+/* #552 — Shimmer animation for skeleton loading placeholders */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-border, #2e3347) 25%,
+    color-mix(in srgb, var(--color-border, #2e3347) 60%, #fff 40%) 50%,
+    var(--color-border, #2e3347) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
 }
 
 .spinner {
@@ -53,7 +71,8 @@
   .fade-in,
   .slide-out,
   .modal-slide-in,
-  .spinner {
+  .spinner,
+  .skeleton-shimmer {
     animation: none !important;
     transition: none !important;
     transform: none !important;
