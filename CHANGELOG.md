@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add ADR-006 documenting the two-step `propose_admin` / `accept_admin` admin transfer pattern, with cross-links from the ADR index, README, admin guide, and key rotation runbook. (#791)
+- Expand the `withdraw_application` section of `docs/contributor-guide.md` with UI and CLI walkthroughs, global count effects, and edge-case error codes; add `ApplicationNotFound` details to `docs/error-reference.md`. (#792)
 
 ---
 
