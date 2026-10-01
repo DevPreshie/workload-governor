@@ -3,17 +3,30 @@ import { createHash } from 'crypto';
 import { pool } from '../db';
 import redis from '../services/redis';
 
-export interface ApiKeyIdentity {
-  keyHash: string;
-  maintainerAddress?: string;
-  orgId?: string;
-}
+export type ApiKeyTier = 'anonymous' | 'contributor' | 'maintainer' | 'admin';
 
-export type AuthenticatedRequest = Request & { apiKeyIdentity?: ApiKeyIdentity };
+/** Limits (requests per minute) per tier – consumed by rate-limit.ts */
+export const TIER_LIMITS: Record<ApiKeyTier, number> = {
+  anonymous: 60,
+  contributor: 180,
+  maintainer: 600,
+  admin: 1200,
+};
 
-const KEY_LIMIT = 120;   // requests per minute for authenticated keys
+// Legacy per-key / per-IP limits kept for backward compat with existing tests
+const KEY_LIMIT = 120;   // requests per minute for authenticated keys (fallback)
 const IP_LIMIT = 30;     // requests per minute for unauthenticated IPs
 const WINDOW_SEC = 60;
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** API key tier, set by apiKeyAuth middleware */
+      apiKeyTier?: ApiKeyTier;
+    }
+  }
+}
 
 function hashKey(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
@@ -24,19 +37,19 @@ function getIp(req: Request): string {
   return (typeof fwd === 'string' ? fwd.split(',')[0] : req.socket.remoteAddress) ?? 'unknown';
 }
 
-async function getApiKeyIdentity(raw: string): Promise<ApiKeyIdentity | undefined> {
+/**
+ * Lookup an API key in the database.
+ * Returns the tier associated with the key, or null if not found.
+ */
+async function getApiKeyTier(raw: string): Promise<ApiKeyTier | null> {
   const h = hashKey(raw);
-  const { rows } = await pool.query(
-    'SELECT key_hash, maintainer_address, org_id, revoked_at FROM api_keys WHERE key_hash = $1',
+  const { rows } = await pool.query<{ tier: ApiKeyTier }>(
+    `SELECT COALESCE(tier, 'contributor') AS tier FROM api_keys WHERE key_hash = $1`,
     [h],
   );
-  const row = rows[0] as Record<string, unknown> | undefined;
-  if (!row || row.revoked_at) return undefined;
-  return {
-    keyHash: h,
-    maintainerAddress: typeof row.maintainer_address === 'string' ? row.maintainer_address : undefined,
-    orgId: typeof row.org_id === 'string' ? row.org_id : undefined,
-  };
+  if (rows.length === 0) return null;
+  const tier = rows[0].tier as ApiKeyTier;
+  return TIER_LIMITS[tier] !== undefined ? tier : 'contributor';
 }
 
 async function checkRedisLimit(
@@ -62,13 +75,14 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
   if (raw) {
     // Try to validate as API key first
     try {
-      const identity = await getApiKeyIdentity(raw);
-      if (identity) {
-        const allowed = await checkRedisLimit(`key:${hashKey(raw)}`, KEY_LIMIT, res);
-        if (allowed) {
-          (req as AuthenticatedRequest).apiKeyIdentity = identity;
-          return next();
-        }
+      const tier = await getApiKeyTier(raw);
+      if (tier !== null) {
+        // Attach tier so tiered rate limiter can read it
+        req.apiKeyTier = tier;
+
+        const limit = TIER_LIMITS[tier];
+        const allowed = await checkRedisLimit(`key:${hashKey(raw)}`, limit, res);
+        if (allowed) return next();
         return;
       }
     } catch {
@@ -79,10 +93,11 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
     return;
   }
 
-  // No key — apply IP-based fallback rate limit
+  // No key — anonymous, apply IP-based fallback rate limit
+  req.apiKeyTier = 'anonymous';
   const ip = getIp(req);
   try {
-    const allowed = await checkRedisLimit(`ip:${ip}`, IP_LIMIT, res);
+    const allowed = await checkRedisLimit(`ip:${ip}`, TIER_LIMITS.anonymous, res);
     if (!allowed) return;
   } catch {
     // If Redis is down, allow through (fail-open)
