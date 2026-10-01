@@ -10,12 +10,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add high-contrast color tokens for WCAG AAA compliance under `prefers-contrast: more`. (#857)
-- Add composite index on `events (org_id, created_at DESC)` in migration `3_add_events_org_created_idx.js`. (#858)
-- Add reversible `down()` migration in `2_event_deduplication.js` and migration idempotency tests. (#859)
+- Add automated release workflow for contract WASM binary packaging and SHA256 checksums. (#878)
+- Configure grouped Dependabot updates for cargo, npm, and GitHub Actions ecosystems. (#879)
+- Mount `/tmp` ephemeral emptyDir volume for hardened read-only filesystem containers. (#870)
 
 ### Changed
-- Configure connection pool leak protection, acquire timeouts, and idle pruning in database connection pool. (#860)
+- Optimize root Dockerfile with multi-stage build, minimal Alpine runner, and non-root node user. (#873)
 
 ---
 
