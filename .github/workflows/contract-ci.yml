@@ -35,7 +35,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -111,7 +111,7 @@ jobs:
           targets: wasm32v1-none
 
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             mutants-report.txt
@@ -166,7 +166,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -210,7 +210,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Restore cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry

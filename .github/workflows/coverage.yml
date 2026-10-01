@@ -90,7 +90,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Cache Rust build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
