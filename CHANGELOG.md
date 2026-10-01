@@ -10,12 +10,10 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add `PodDisruptionBudget` template to vesting-backend Helm chart. (#869)
-- Add `startupProbe` and exposed probe thresholds in vesting-backend Helm chart. (#872)
-- Add Gitleaks secret scanning CI job with custom rules for Stellar secret seeds and API keys. (#877)
-
-### Changed
-- Enable ElastiCache Redis multi-AZ and automatic failover in Terraform cache module. (#868)
+- Add Horizon and Soroban RPC node migration runbook `docs/runbooks/horizon-migration.md` and index `docs/runbooks/README.md`. (#890)
+- Add Soroban Symbol 64-bit hash collision and namespace overlap detection in `scripts/check-key-collisions.sh`. (#894)
+- Add contract WASM binary size budget assertion (< 64 KB) in `scripts/test-contract.sh` and CI. (#895)
+- Standardize developer and testing targets in root `Makefile` with dynamic `make help`. (#896)
 
 ---
 

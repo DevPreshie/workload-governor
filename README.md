@@ -226,6 +226,22 @@ cargo test --features testutils bench_
 cargo test --features testutils bench_ 2>&1 | tee benchmarks.txt
 ```
 
+## Development & Makefile Targets
+
+Standardized targets in the root `Makefile` simplify local development and testing:
+
+| Command | Description |
+|---|---|
+| `make setup` | Install backend, frontend, and rust dependencies |
+| `make build-all` | Compile smart contract, backend, and frontend |
+| `make test-all` | Run all test suites across contract, backend, and frontend |
+| `make test-contract` | Run contract unit tests and verify storage key collision freedom |
+| `make lint-all` | Run formatters and linters across contract, backend, and frontend |
+| `make dev` | Launch backend and frontend dev servers concurrently with hot reload |
+| `make help` | Display dynamic list of all Makefile targets and descriptions |
+
+Run `make help` in your terminal for the full list of targets and tunables.
+
 ## Deploying
 
 ```bash
