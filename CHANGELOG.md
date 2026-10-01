@@ -10,7 +10,8 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add `docs/sast.md` documenting Semgrep SAST rules, local execution instructions, CI integration, suppression process, adding new rules, and threat model mapping. (#799)
+- Add document schema section to `docs/ACCESSIBILITY_AUDIT.md` defining severity levels (Critical/High/Medium/Low), status values (Open/In Progress/Fixed/Won't Fix/Deferred), and table field descriptions. (#800)
+- Add re-audit process section to `docs/ACCESSIBILITY_AUDIT.md` covering when to re-audit, tools (axe-core, Playwright, screen reader), how to update tracking table status, and how to add new findings. (#800)
 
 ---
 
