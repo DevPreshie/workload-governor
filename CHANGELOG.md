@@ -70,6 +70,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
   focusable dismiss button, support Escape-key dismissal, and pause auto-dismiss while
   hovered or focused.
 
+### Fixed
+
+- Transaction form submit buttons are now disabled while validation errors are
+  present and re-enabled after correction; existing validation and accessibility
+  feedback is preserved (#807).
+
 ### Added
 - **#607 Comprehensive contributor onboarding guide**: Expanded `docs/contributor-guide.md`
   with full prerequisites (Rust, Node.js, Stellar CLI, Docker versions), 5-minute local
