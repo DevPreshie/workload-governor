@@ -16,9 +16,10 @@
  */
 
 import { SorobanRpc, xdr as stellarXdr, scValToNative } from '@stellar/stellar-sdk';
-import { pool } from './db';
+import { pool, getCheckpoint, saveCheckpoint } from './db';
 import { logger } from './logger';
 import { publishLiveEvent } from './services/event-bus';
+import { getCache, setCache } from './services/redis';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -186,6 +187,8 @@ export class EventIndexer {
   /** Paging cursor for the next RPC call. Undefined means start from resume ledger. */
   private cursor: string | undefined;
   private isRunning = false;
+  private lastCheckpointLedger: number = 0;
+  private lastCheckpointTime: number = Date.now();
 
   constructor() {
     this.server = new SorobanRpc.Server(RPC_URL, { allowHttp: true });
@@ -220,27 +223,56 @@ export class EventIndexer {
   // ── Cursor / resume ──────────────────────────────────────────────────────
 
   /**
-   * On restart, re-process from the last finalized ledger to handle reorgs.
-   * Uses the highest ledger_seq stored in contract_events as the resume point.
-   *
-   * Because INSERT uses ON CONFLICT DO NOTHING, replaying events from the
-   * resume ledger is safe — already-indexed events are silently skipped.
-   * This prevents duplicates even if the cursor is lost (fixes issue #575).
+   * On restart, re-process from the last confirmed checkpoint.
+   * Priority:
+   *   1. Redis cache checkpoint (`indexer:checkpoint:<contractId>`)
+   *   2. Database table `indexer_checkpoints` if Redis cache is empty / evicted
+   *   3. `MAX(ledger_seq)` from `contract_events`
+   *   4. Genesis
    */
   private async initCursor(): Promise<void> {
     try {
-      const { rows } = await pool.query<{ max_ledger: string | null }>(
-        'SELECT MAX(ledger_seq) AS max_ledger FROM contract_events',
-      );
-      const maxLedger = rows[0]?.max_ledger != null ? parseInt(rows[0].max_ledger, 10) : null;
+      let resumeLedger: number | null = null;
 
-      if (maxLedger !== null && maxLedger > 0) {
-        // Use the last finalized ledger as the start cursor so we re-fetch
-        // that ledger's events and handle any potential reorg.
-        // The cursor format expected by getEvents is "<ledger>-<tx>-<event>"
-        // Passing just the ledger number as a numeric string is also accepted.
-        this.cursor = String(maxLedger);
-        logger.info({ message: 'Resuming indexer from ledger', ledger: maxLedger });
+      // 1. Try Redis cache first
+      try {
+        const cached = await getCache<number | { last_ledger: number }>(`indexer:checkpoint:${CONTRACT_ID}`);
+        if (cached !== null && cached !== undefined) {
+          const num = typeof cached === 'number' ? cached : cached.last_ledger;
+          if (typeof num === 'number' && num > 0) {
+            resumeLedger = num;
+            logger.info({ message: 'Resuming indexer from Redis cache checkpoint', ledger: resumeLedger });
+          }
+        }
+      } catch {
+        // Cache miss or Redis unavailable
+      }
+
+      // 2. If Redis cache is empty, resume from database checkpoint table
+      if (resumeLedger === null) {
+        try {
+          const dbCheckpoint = await getCheckpoint(CONTRACT_ID, pool);
+          if (dbCheckpoint && dbCheckpoint.last_ledger > 0) {
+            resumeLedger = dbCheckpoint.last_ledger;
+            logger.info({ message: 'Resuming indexer from database checkpoint', ledger: resumeLedger });
+          }
+        } catch {
+          // Table might not exist yet or query failed
+        }
+      }
+
+      // 3. Fall back to MAX(ledger_seq) from contract_events
+      if (resumeLedger === null) {
+        const { rows } = await pool.query<{ max_ledger: string | null }>(
+          'SELECT MAX(ledger_seq) AS max_ledger FROM contract_events',
+        );
+        resumeLedger = rows[0]?.max_ledger != null ? parseInt(rows[0].max_ledger, 10) : null;
+      }
+
+      if (resumeLedger !== null && resumeLedger > 0) {
+        this.cursor = String(resumeLedger);
+        this.lastCheckpointLedger = resumeLedger;
+        logger.info({ message: 'Resuming indexer from ledger', ledger: resumeLedger });
       } else {
         this.cursor = undefined;
         logger.info({ message: 'Starting indexer from genesis (no stored events)' });
@@ -291,14 +323,26 @@ export class EventIndexer {
           // Advance cursor to the last event's pagingToken
           const last = events[events.length - 1];
           this.cursor = last.pagingToken ?? last.id;
+          const lastLedger = parseInt(last.ledger, 10);
 
           logger.info({
             message: 'Indexed event batch',
-            ledger: parseInt(events[events.length - 1].ledger, 10),
+            ledger: lastLedger,
             total: events.length,
             persisted,
             skipped,
           });
+
+          // Commit checkpoint every 5 seconds or upon every 100 ledgers
+          const now = Date.now();
+          if (
+            lastLedger - this.lastCheckpointLedger >= 100 ||
+            now - this.lastCheckpointTime >= 5_000
+          ) {
+            await this.commitCheckpointTransaction(lastLedger, last.txHash);
+            this.lastCheckpointLedger = lastLedger;
+            this.lastCheckpointTime = now;
+          }
         }
 
         await sleep(POLL_INTERVAL_MS);
@@ -309,6 +353,33 @@ export class EventIndexer {
         });
         await sleep(ERROR_BACKOFF_MS);
       }
+    }
+  }
+
+  /**
+   * Commit confirmed ledger progress to database transactionally.
+   */
+  async commitCheckpointTransaction(ledger: number, hash?: string): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await saveCheckpoint(CONTRACT_ID, ledger, hash ?? null, client);
+      await client.query('COMMIT');
+
+      // Update Redis cache as well
+      try {
+        await setCache(`indexer:checkpoint:${CONTRACT_ID}`, ledger, 3600);
+      } catch {
+        // Non-fatal
+      }
+    } catch (err) {
+      await client.query('ROLLBACK');
+      logger.error({
+        message: 'Failed to commit ledger checkpoint transaction',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      client.release();
     }
   }
 

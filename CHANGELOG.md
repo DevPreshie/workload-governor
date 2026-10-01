@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add ARIA live region to `ContributorProfile.tsx` for real-time workload cap auditory announcements (#851).
+- Persist indexer ledger sync checkpoints to dedicated database table `indexer_checkpoints` with transactional commit and startup recovery fallback (#849).
 
 ---
 
