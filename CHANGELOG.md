@@ -9,9 +9,8 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
-### Fixed
-- Withdraw button is now disabled while a withdrawal transaction is pending to
-  prevent duplicate withdrawal submissions (#808).
+### Added
+- Instrument Horizon and Soroban RPC calls in `backend/src/HorizonService.ts` with OpenTelemetry spans and collector service in `docker-compose.yml` (#850).
 
 ---
 
@@ -70,15 +69,6 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
   New tokens added: `--color-error-600: #dc2626`, `--color-success-600: #16a34a`,
   `--color-warning-600: #ca8a04`. All fixes applied at token level — no component overrides.
-- **#809 Toast keyboard accessibility**: Toast notifications now include a visible,
-  focusable dismiss button, support Escape-key dismissal, and pause auto-dismiss while
-  hovered or focused.
-
-### Fixed
-
-- Transaction form submit buttons are now disabled while validation errors are
-  present and re-enabled after correction; existing validation and accessibility
-  feedback is preserved (#807).
 
 ### Added
 - **#607 Comprehensive contributor onboarding guide**: Expanded `docs/contributor-guide.md`
