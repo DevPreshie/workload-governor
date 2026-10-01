@@ -9,6 +9,10 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
+### Fixed
+- Withdraw button is now disabled while a withdrawal transaction is pending to
+  prevent duplicate withdrawal submissions (#808).
+
 ---
 
 ## [0.3.0] - 2026-08-28
