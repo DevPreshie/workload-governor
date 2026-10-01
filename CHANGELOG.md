@@ -10,12 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add automated release workflow for contract WASM binary packaging and SHA256 checksums. (#878)
-- Configure grouped Dependabot updates for cargo, npm, and GitHub Actions ecosystems. (#879)
-- Mount `/tmp` ephemeral emptyDir volume for hardened read-only filesystem containers. (#870)
-
-### Changed
-- Optimize root Dockerfile with multi-stage build, minimal Alpine runner, and non-root node user. (#873)
+- Add `scripts/check-api-docs-sync.js` and a `docs-sync` CI job that fail when an `openapi.yaml` operation is missing from `docs/api-reference.md`; document the 16 missing spec endpoints and the endpoint-change workflow in `docs/contributing.md`. (#790)
 
 ---
 
