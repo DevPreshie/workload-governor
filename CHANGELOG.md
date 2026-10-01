@@ -9,8 +9,8 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
-### Changed
-- **#864 [INFRA-002] Align ECS task CPU/memory with container definitions**: Updated `terraform/modules/compute/main.tf` to expose `cpu` and `memory` as configurable variables via `variables.tf`, eliminating 50% stranded Fargate capacity. Container-level CPU/memory reservations now exactly match task-level allocations. Per-environment defaults are set via `terraform.tfvars.example` (staging: 512 CPU / 1024 MB; production: 1024 CPU / 2048 MB). Autoscaling metric thresholds in `infra/ecs-autoscaling.tf` are now driven by `cpu_target_utilization` and `memory_target_utilization` variables, with a new memory tracking policy and alarm added.
+### Added
+- **#863 [INFRA-001] Automated KMS key rotation in Terraform secrets module**: Added customer-managed KMS keys (`aws_kms_key`) with `enable_key_rotation = true` for all secrets in `terraform/modules/secrets/main.tf`, satisfying CIS AWS Benchmark 2.8. Each secret (`db_password`, `github_token`, `jwt_secret`) now has a dedicated CMK with annual automated rotation. Secrets Manager resources updated to reference their CMK via `kms_key_id`. New `kms_rotation_status` and `kms_key_arns` outputs added to `outputs.tf`. Documented in `infra/BRANCH-ROTATION.md`.
 
 ---
 
