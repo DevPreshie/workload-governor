@@ -180,3 +180,20 @@ pub fn emit_cap_changed(
     let data = (proposal_id, new_global_cap);
     env.events().publish(topics, data);
 }
+
+// ---------------------------------------------------------------------------
+// #828 SC-003 — Admin action nonce event
+// ---------------------------------------------------------------------------
+
+/// Emitted after every privileged admin operation to record the consumed nonce.
+///
+/// topics: `(symbol_short!("adm_act"), admin)`
+/// data:   `(nonce: u32,)`
+///
+/// Off-chain indexers can use this event to confirm each governance action was
+/// executed exactly once with a unique, monotonically-increasing sequence number.
+pub(crate) fn emit_admin_action_executed(env: &Env, admin: &Address, nonce: u32) {
+    let topics = (symbol_short!("adm_act"), admin.clone());
+    let data = (nonce,);
+    env.events().publish(topics, data);
+}

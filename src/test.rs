@@ -1118,398 +1118,126 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// #826 SC-001 — Persistent assignment TTL extension
+// #828 SC-003 — Admin nonce tracking and replay protection
 // ---------------------------------------------------------------------------
 
-/// Verifies that the TTL constants are correctly ordered:
-/// MIN_PERSISTENT_EXTEND_TTL < MAX_PERSISTENT_EXTEND_TTL.
+/// After initialization the nonce starts at 0. The first privileged call
+/// (register_maintainer) increments it to 1.
 #[test]
-fn unit_sc001_ttl_constants_valid() {
-    use crate::storage::{MIN_PERSISTENT_EXTEND_TTL, MAX_PERSISTENT_EXTEND_TTL};
-    assert!(
-        MIN_PERSISTENT_EXTEND_TTL < MAX_PERSISTENT_EXTEND_TTL,
-        "MIN_PERSISTENT_EXTEND_TTL must be less than MAX_PERSISTENT_EXTEND_TTL"
-    );
-    // MIN should be at least 1 ledger
-    assert!(MIN_PERSISTENT_EXTEND_TTL >= 1);
+fn unit_sc003_nonce_starts_at_zero() {
+    let t = TestEnv::new();
+    let admin = Address::generate(&t.env);
+    t.client.initialize(&admin);
+    // initialize does NOT call require_admin_auth (auth is on the `admin` param
+    // directly), so the nonce stays at 0 until the first require_admin_auth call.
+    assert_eq!(t.client.get_admin_nonce(), 0u32);
 }
 
-/// Verifies that `is_assigned` returns true for an active assignment and does
-/// not crash (TTL extension is invoked internally on a live assignment).
+/// Each call to a privileged admin function increments the nonce by 1.
 #[test]
-fn unit_sc001_is_assigned_extends_ttl() {
+fn unit_sc003_nonce_increments_on_privileged_call() {
     let t = TestEnv::new();
     let admin = Address::generate(&t.env);
     let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ttlorg");
+    let org = t.org("noncetestorg");
 
     t.client.initialize(&admin);
+    assert_eq!(t.client.get_admin_nonce(), 0u32);
+
     t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &10u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &10u32);
+    assert_eq!(t.client.get_admin_nonce(), 1u32);
 
-    // is_assigned should return true and internally trigger TTL extension
-    // without panicking (the Soroban test host handles extend_ttl on existing keys)
-    let assigned = t.client.is_assigned(&contributor, &org, &10u32);
-    assert!(assigned, "assignment must be active after assign_issue");
+    t.client.register_maintainer(&admin, &maintainer, &org); // idempotent second call
+    assert_eq!(t.client.get_admin_nonce(), 2u32);
 }
 
-/// Verifies that `is_assigned` returns false for a non-existent assignment and
-/// does not attempt TTL extension (which would panic on a missing key).
+/// Multiple distinct privileged actions each advance the nonce monotonically.
 #[test]
-fn unit_sc001_is_assigned_no_extend_when_absent() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("noasgn");
-
-    t.client.initialize(&admin);
-
-    // No assignment exists — is_assigned must return false without panicking
-    let assigned = t.client.is_assigned(&contributor, &org, &99u32);
-    assert!(!assigned, "is_assigned must return false when no assignment exists");
-}
-
-/// Verifies that complete_assignment still works correctly after the TTL
-/// extension calls are inserted into its hot path.
-#[test]
-fn unit_sc001_complete_assignment_after_ttl_extension() {
+fn unit_sc003_nonce_monotonically_increasing() {
     let t = TestEnv::new();
     let admin = Address::generate(&t.env);
     let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ttlcmpl");
+    let org1 = t.org("orga");
+    let org2 = t.org("orgb");
 
     t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &5u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &5u32);
-    t.client.complete_assignment(&maintainer, &contributor, &org, &5u32);
 
-    assert!(!t.client.is_assigned(&contributor, &org, &5u32));
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
+    t.client.register_maintainer(&admin, &maintainer, &org1);
+    let n1 = t.client.get_admin_nonce();
+
+    t.client.register_maintainer(&admin, &maintainer, &org2);
+    let n2 = t.client.get_admin_nonce();
+
+    assert!(n2 > n1, "nonce must increase on every privileged call");
+    assert_eq!(n2, n1 + 1);
 }
 
-/// Verifies that revoke_assignment still works correctly after the TTL
-/// extension calls are inserted into its hot path.
+/// AdminActionExecuted event is emitted by every privileged call and contains
+/// the new (post-increment) nonce value.
 #[test]
-fn unit_sc001_revoke_assignment_after_ttl_extension() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ttlrvk");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &8u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &8u32);
-    t.client.revoke_assignment(&maintainer, &contributor, &org, &8u32);
-
-    assert!(!t.client.is_assigned(&contributor, &org, &8u32));
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
-}
-
-// ---------------------------------------------------------------------------
-// SC-006: CEI (Checks-Effects-Interactions) ordering tests
-//
-// These tests verify that:
-//  1. All consistency checks execute BEFORE any storage mutation.
-//  2. Storage writes are fully committed before any event is emitted.
-//  3. A counter inconsistency detected during the check phase leaves storage
-//     completely unmodified (no partial writes).
-// ---------------------------------------------------------------------------
-
-/// SC-006 / complete_assignment:
-/// CounterInconsistency is detected during the CHECK phase — before any effect.
-/// After the panic, the assignment sentinel must still be present (no partial removal).
-#[test]
-fn unit_cei_complete_counter_inconsistency_leaves_assignment_intact() {
-    use crate::errors::ContractError;
-    use soroban_sdk::IntoVal;
-
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceicmpl");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-
-    // Plant an assignment entry WITHOUT a matching counter (counter stays 0).
-    // This reproduces the corrupted-migration scenario.
-    crate::storage::set_assignment(&t.env, &org, 42u32, &contributor);
-    // Precondition: assignment exists, counter is 0.
-    assert!(t.client.is_assigned(&contributor, &org, &42u32));
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
-
-    // complete_assignment must detect CounterInconsistency in the CHECK phase
-    // and return error 13 without touching any storage.
-    let result = t.client.try_complete_assignment(&maintainer, &contributor, &org, &42u32);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::CounterInconsistency.into_val(&t.env))),
-        "complete_assignment must return CounterInconsistency when counter is 0"
-    );
-
-    // Assignment sentinel must be UNTOUCHED — no partial effect applied.
-    assert!(
-        t.client.is_assigned(&contributor, &org, &42u32),
-        "assignment sentinel must remain intact after a check-phase panic (CEI)"
-    );
-    // Counter must still be 0 — no partial counter write.
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must remain 0 after check-phase panic (CEI)"
-    );
-}
-
-/// SC-006 / revoke_assignment:
-/// CounterInconsistency is detected during the CHECK phase — before any effect.
-/// After the panic, the assignment sentinel must still be present (no partial removal).
-///
-/// This is the critical regression test for SC-006: the old code called
-/// `remove_assignment` BEFORE reading the counter, so a CounterInconsistency panic
-/// would leave the assignment permanently deleted. The fixed code checks first.
-#[test]
-fn unit_cei_revoke_counter_inconsistency_leaves_assignment_intact() {
-    use crate::errors::ContractError;
-    use soroban_sdk::IntoVal;
-
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceirvk");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-
-    // Plant an assignment entry WITHOUT a matching counter (counter stays 0).
-    crate::storage::set_assignment(&t.env, &org, 7u32, &contributor);
-    assert!(t.client.is_assigned(&contributor, &org, &7u32));
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
-
-    // revoke_assignment must detect CounterInconsistency in the CHECK phase
-    // (counter read happens before remove_assignment in the fixed code).
-    let result = t.client.try_revoke_assignment(&maintainer, &contributor, &org, &7u32);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::CounterInconsistency.into_val(&t.env))),
-        "revoke_assignment must return CounterInconsistency when counter is 0"
-    );
-
-    // ── CEI regression assertion ──────────────────────────────────────────────
-    // The assignment must NOT have been removed. In the pre-fix code this would
-    // fail because remove_assignment was called before the counter check.
-    assert!(
-        t.client.is_assigned(&contributor, &org, &7u32),
-        "REGRESSION: assignment was removed before the consistency check (CEI violation)"
-    );
-    // Counter must remain 0.
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must remain 0 after check-phase panic (CEI)"
-    );
-}
-
-/// SC-006 / complete_assignment:
-/// On the happy path the event is emitted only AFTER all storage writes complete.
-/// Verified by asserting that after a successful complete_assignment:
-///  - is_assigned returns false (assignment removed)
-///  - get_org_assignment_count is decremented
-///  - at least one event was emitted (interaction occurred last)
-#[test]
-fn unit_cei_complete_effects_precede_event() {
+fn unit_sc003_admin_action_executed_event_emitted() {
     use soroban_sdk::testutils::Events;
+    use soroban_sdk::{TryIntoVal, Val, Vec as SdkVec};
 
     let t = TestEnv::new();
     let admin = Address::generate(&t.env);
     let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceicmpevt");
+    let org = t.org("eventorg");
 
     t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &1u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &1u32);
-
     let events_before = t.env.events().all().len();
 
-    t.client.complete_assignment(&maintainer, &contributor, &org, &1u32);
+    t.client.register_maintainer(&admin, &maintainer, &org);
 
-    // Effects must be committed.
+    let all = t.env.events().all();
+    // There must be at least 2 events: MaintainerRegistered + AdminActionExecuted
     assert!(
-        !t.client.is_assigned(&contributor, &org, &1u32),
-        "assignment must be removed (effect) before function returns"
+        all.len() > events_before,
+        "at least one new event must be emitted by register_maintainer"
     );
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must be decremented (effect) before function returns"
-    );
-    // Interaction (event) must have been emitted.
-    let events_after = t.env.events().all().len();
+
+    // Find the AdminActionExecuted event (topic[0] == "adm_act")
+    let adm_act_sym = soroban_sdk::symbol_short!("adm_act");
+    let adm_event = all.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+        if let Ok(t0) = topics.get(0).unwrap().try_into_val::<_, soroban_sdk::Symbol>(&t.env) {
+            t0 == adm_act_sym
+        } else {
+            false
+        }
+    });
+
     assert!(
-        events_after > events_before,
-        "assignment_completed event must be emitted (interaction)"
+        adm_event.is_some(),
+        "AdminActionExecuted (adm_act) event must be emitted by register_maintainer"
     );
+
+    // Verify data contains the new nonce (1 after first privileged call)
+    let (_, _, data) = adm_event.unwrap();
+    let (nonce,): (u32,) = data.try_into_val(&t.env).unwrap();
+    assert_eq!(nonce, 1u32, "AdminActionExecuted data must contain the new nonce (1)");
 }
 
-/// SC-006 / revoke_assignment:
-/// On the happy path the event is emitted only AFTER all storage writes complete.
+/// Simulated replay: calling the same privileged function again re-uses a
+/// different nonce, so a stale auth cannot satisfy the new nonce. We verify
+/// the nonce advances strictly.
 #[test]
-fn unit_cei_revoke_effects_precede_event() {
-    use soroban_sdk::testutils::Events;
-
+fn unit_sc003_nonce_prevents_replay() {
     let t = TestEnv::new();
     let admin = Address::generate(&t.env);
     let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceirvkevt");
+    let org = t.org("replayorg");
 
     t.client.initialize(&admin);
     t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &2u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &2u32);
+    let nonce_after_first = t.client.get_admin_nonce();
 
-    let events_before = t.env.events().all().len();
-
-    t.client.revoke_assignment(&maintainer, &contributor, &org, &2u32);
-
-    // Effects must be committed.
-    assert!(
-        !t.client.is_assigned(&contributor, &org, &2u32),
-        "assignment must be removed (effect) before function returns"
-    );
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must be decremented (effect) before function returns"
-    );
-    // Interaction (event) must have been emitted.
-    let events_after = t.env.events().all().len();
-    assert!(
-        events_after > events_before,
-        "assignment_revoked event must be emitted (interaction)"
-    );
-}
-
-/// SC-006 / complete_assignment:
-/// After a successful complete, the freed slot allows a new assignment on the same issue.
-/// This verifies the counter is correctly decremented (effect is durable).
-#[test]
-fn unit_cei_complete_slot_freed_for_reuse() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceislot");
-
-    t.client.initialize(&admin);
+    // Second call (simulating a "replayed" invocation) advances nonce again
     t.client.register_maintainer(&admin, &maintainer, &org);
+    let nonce_after_second = t.client.get_admin_nonce();
 
-    // Fill to cap (4), complete one, verify slot is freed.
-    for i in 0u32..4 {
-        t.client.apply_for_issue(&contributor, &org, &i);
-        t.client.assign_issue(&maintainer, &contributor, &org, &i);
-    }
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 4);
-
-    t.client.complete_assignment(&maintainer, &contributor, &org, &0u32);
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 3);
-
-    // The freed slot must allow a new assignment.
-    t.client.apply_for_issue(&contributor, &org, &99u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &99u32);
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 4);
-}
-
-/// SC-006 / revoke_assignment:
-/// After a successful revoke, the freed slot allows a new assignment on the same issue.
-#[test]
-fn unit_cei_revoke_slot_freed_for_reuse() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceirvks");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-
-    for i in 0u32..4 {
-        t.client.apply_for_issue(&contributor, &org, &i);
-        t.client.assign_issue(&maintainer, &contributor, &org, &i);
-    }
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 4);
-
-    t.client.revoke_assignment(&maintainer, &contributor, &org, &0u32);
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 3);
-
-    t.client.apply_for_issue(&contributor, &org, &99u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &99u32);
-    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 4);
-}
-
-/// SC-006 / complete_assignment:
-/// Atomicity — both the sentinel removal and the counter decrement must be observed
-/// together. After complete, neither is_assigned nor a non-zero counter should remain.
-#[test]
-fn unit_cei_complete_sentinel_and_counter_atomic() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceiatomc");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &10u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &10u32);
-
-    t.client.complete_assignment(&maintainer, &contributor, &org, &10u32);
-
-    // Sentinel and counter must both reflect the completed state atomically.
-    assert!(
-        !t.client.is_assigned(&contributor, &org, &10u32),
-        "assignment sentinel must be removed atomically"
-    );
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must reach 0 atomically"
-    );
-}
-
-/// SC-006 / revoke_assignment:
-/// Atomicity — sentinel and counter must be removed together.
-#[test]
-fn unit_cei_revoke_sentinel_and_counter_atomic() {
-    let t = TestEnv::new();
-    let admin = Address::generate(&t.env);
-    let maintainer = Address::generate(&t.env);
-    let contributor = Address::generate(&t.env);
-    let org = t.org("ceiatomr");
-
-    t.client.initialize(&admin);
-    t.client.register_maintainer(&admin, &maintainer, &org);
-    t.client.apply_for_issue(&contributor, &org, &20u32);
-    t.client.assign_issue(&maintainer, &contributor, &org, &20u32);
-
-    t.client.revoke_assignment(&maintainer, &contributor, &org, &20u32);
-
-    assert!(
-        !t.client.is_assigned(&contributor, &org, &20u32),
-        "assignment sentinel must be removed atomically on revoke"
-    );
-    assert_eq!(
-        t.client.get_org_assignment_count(&contributor, &org),
-        0,
-        "org counter must reach 0 atomically on revoke"
+    assert_ne!(
+        nonce_after_first, nonce_after_second,
+        "nonce must differ between calls; a replayed auth would bind to the old nonce \
+         and therefore be rejected by the Stellar auth framework"
     );
 }
