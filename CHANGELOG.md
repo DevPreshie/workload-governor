@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- **#863 [INFRA-001] Automated KMS key rotation in Terraform secrets module**: Added customer-managed KMS keys (`aws_kms_key`) with `enable_key_rotation = true` for all secrets in `terraform/modules/secrets/main.tf`, satisfying CIS AWS Benchmark 2.8. Each secret (`db_password`, `github_token`, `jwt_secret`) now has a dedicated CMK with annual automated rotation. Secrets Manager resources updated to reference their CMK via `kms_key_id`. New `kms_rotation_status` and `kms_key_arns` outputs added to `outputs.tf`. Documented in `infra/BRANCH-ROTATION.md`.
+- **#862 [DB-005] Database ping latency and connection state metrics on health endpoint**: Updated `src/routes/health.ts` to measure `SELECT 1` round-trip latency, expose `latency_ms` and `pool: { active, idle, waiting }` in the health response, return HTTP 503 when DB is unavailable or latency exceeds 2000ms, and promote `db.status` to a 3-state model (`healthy` | `degraded` | `unhealthy`). Updated `backend/src/health.ts` checkDatabase function with matching pool stats and degraded-state logic. Updated `tests/routes/health.test.ts` to assert all new fields.
 
 ---
 
