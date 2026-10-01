@@ -76,5 +76,29 @@ module.exports = {
         ],
       },
     },
+    {
+      displayName: 'integration',
+      preset: 'ts-jest',
+      testEnvironment: 'node',
+      testMatch: [
+        '<rootDir>/tests/multi-org.test.ts',
+        '<rootDir>/tests/integration/**/*.test.ts',
+      ],
+      moduleNameMapper: {
+        '^@stellar/stellar-sdk$': '<rootDir>/__mocks__/@stellar/stellar-sdk.js',
+      },
+      transform: {
+        '^.+\\.tsx?$': [
+          'ts-jest',
+          {
+            tsconfig: '<rootDir>/tsconfig.dev.json',
+            diagnostics: {
+              ignoreCodes: ['TS2307', 'TS2305', 'TS7016', 'TS2724', 'TS2345', 'TS2554', 'TS2339', 'TS2358', 'TS7006'],
+            },
+          },
+        ],
+      },
+    },
   ],
 };
+
