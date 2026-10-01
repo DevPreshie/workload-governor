@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { NavBar } from "./components/NavBar";
 import { OnboardingWizard, GetStartedButton } from "./components/OnboardingWizard";
 import { MaintainerPanel } from "./components/MaintainerPanel";
@@ -6,8 +6,9 @@ import type { Application, Assignment } from "./components/MaintainerPanel";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ActivityPage } from "./components/ActivityPage";
 import { ToastContainer, useToast } from "./components/Toast";
+import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
 import { useWallet } from "./hooks/useWallet";
-import { useViewTransition } from "./hooks/useViewTransition";
+import { useKeyboardShortcuts, type ShortcutHandler } from "./hooks/useKeyboardShortcuts";
 import "./app.css";
 
 const DEMO_APPS: Application[] = [
@@ -37,14 +38,10 @@ export default function App() {
   const [applications, setApplications] = useState(DEMO_APPS);
   const [assignments, setAssignments] = useState(DEMO_ASGNS);
   const { toasts, add: addToast, remove: removeToast } = useToast();
-  const startTransition = useViewTransition();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  /** Navigate to a hash route with a view transition (fade+slide). */
-  function navigateTo(newHash: string) {
-    startTransition(() => {
-      window.location.hash = newHash;
-    });
-  }
+  // Ref to the search/filter input so '/' can focus it
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   async function handleAssign(app: Application) {
     await new Promise((r) => setTimeout(r, 400));
@@ -65,6 +62,31 @@ export default function App() {
     addToast(`Revoked "${asgn.issueTitle}"`, "info");
   }
 
+  const shortcuts: ShortcutHandler[] = [
+    {
+      key: '?',
+      description: 'Open this keyboard shortcuts help modal',
+      handler: () => setShortcutsOpen(true),
+    },
+    {
+      key: '/',
+      description: 'Focus the search / filter input',
+      handler: () => {
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      },
+    },
+    {
+      key: 'Escape',
+      description: 'Close any open modal',
+      handler: () => setShortcutsOpen(false),
+    },
+  ];
+
+  // Disable global shortcuts while the shortcuts modal itself is open
+  // (the modal handles Escape internally via its own keydown handler)
+  useKeyboardShortcuts(shortcuts, !shortcutsOpen);
+
   return (
     <>
       <a href="#main-content" className="skip-link">
@@ -77,7 +99,6 @@ export default function App() {
         networkMismatch={wallet.networkMismatch}
         onConnect={wallet.connect}
         onDisconnect={wallet.disconnect}
-        onNavigate={navigateTo}
       />
 
       <main id="main-content" className="app-main" tabIndex={-1}>
@@ -105,6 +126,13 @@ export default function App() {
 
       <OnboardingWizard />
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      {/* Keyboard shortcut help modal — triggered by '?' key */}
+      <KeyboardShortcutsModal
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        shortcuts={shortcuts}
+      />
     </>
   );
 }
