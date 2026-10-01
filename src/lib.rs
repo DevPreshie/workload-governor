@@ -293,8 +293,12 @@ impl WorkloadGovernor {
         } else {
             storage::set_global_app_count(&env, &contributor, new_app_count);
         }
-        storage::set_org_assignment_count(&env, &contributor, &org_id, asgn_count + 1);
+        let new_asgn_count = asgn_count + 1;
+        storage::set_org_assignment_count(&env, &contributor, &org_id, new_asgn_count);
         storage::set_assignment(&env, &org_id, issue_id, &contributor);
+        // #826 SC-001: extend TTL on new assignment entries
+        storage::extend_assignment_ttl(&env, &org_id, issue_id, &contributor);
+        storage::extend_org_assignment_count_ttl(&env, &contributor, &org_id);
         storage::bump_instance(&env);
         events::emit_issue_assigned(&env, &maintainer, &contributor, &org_id, issue_id);
     }
@@ -319,6 +323,8 @@ impl WorkloadGovernor {
         if !storage::has_assignment(&env, &org_id, issue_id, &contributor) {
             panic_with_error!(env, ContractError::AssignmentNotFound);
         }
+        // #826 SC-001: extend TTL on assignment lookup before removal
+        storage::extend_assignment_ttl(&env, &org_id, issue_id, &contributor);
         storage::remove_assignment(&env, &org_id, issue_id, &contributor);
         let asgn_count = storage::get_org_assignment_count(&env, &contributor, &org_id);
         let new_count = asgn_count.saturating_sub(1);
@@ -326,6 +332,7 @@ impl WorkloadGovernor {
             storage::remove_org_assignment_count(&env, &contributor, &org_id);
         } else {
             storage::set_org_assignment_count(&env, &contributor, &org_id, new_count);
+            storage::extend_org_assignment_count_ttl(&env, &contributor, &org_id);
         }
         storage::bump_instance(&env);
         events::emit_assignment_completed(&env, &maintainer, &contributor, &org_id, issue_id);
@@ -351,6 +358,8 @@ impl WorkloadGovernor {
         if !storage::has_assignment(&env, &org_id, issue_id, &contributor) {
             panic_with_error!(env, ContractError::AssignmentNotFound);
         }
+        // #826 SC-001: extend TTL on assignment lookup before removal
+        storage::extend_assignment_ttl(&env, &org_id, issue_id, &contributor);
         storage::remove_assignment(&env, &org_id, issue_id, &contributor);
         let asgn_count = storage::get_org_assignment_count(&env, &contributor, &org_id);
         let new_count = asgn_count.saturating_sub(1);
@@ -358,6 +367,7 @@ impl WorkloadGovernor {
             storage::remove_org_assignment_count(&env, &contributor, &org_id);
         } else {
             storage::set_org_assignment_count(&env, &contributor, &org_id, new_count);
+            storage::extend_org_assignment_count_ttl(&env, &contributor, &org_id);
         }
         storage::bump_instance(&env);
         events::emit_assignment_revoked(&env, &maintainer, &contributor, &org_id, issue_id);
@@ -534,7 +544,13 @@ impl WorkloadGovernor {
 
     /// Returns `true` if the contributor is actively assigned to the given issue.
     pub fn is_assigned(env: Env, contributor: Address, org_id: Symbol, issue_id: u32) -> bool {
-        storage::has_assignment(&env, &org_id, issue_id, &contributor)
+        let assigned = storage::has_assignment(&env, &org_id, issue_id, &contributor);
+        // #826 SC-001: extend TTL on every assignment lookup to prevent state expiry
+        if assigned {
+            storage::extend_assignment_ttl(&env, &org_id, issue_id, &contributor);
+            storage::extend_org_assignment_count_ttl(&env, &contributor, &org_id);
+        }
+        assigned
     }
 
     /// Returns the current effective global application cap.

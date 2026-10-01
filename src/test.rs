@@ -1116,3 +1116,97 @@ proptest! {
         prop_assert_eq!(client.get_global_cap(), 15u32);
     }
 }
+
+// ---------------------------------------------------------------------------
+// #826 SC-001 — Persistent assignment TTL extension
+// ---------------------------------------------------------------------------
+
+/// Verifies that the TTL constants are correctly ordered:
+/// MIN_PERSISTENT_EXTEND_TTL < MAX_PERSISTENT_EXTEND_TTL.
+#[test]
+fn unit_sc001_ttl_constants_valid() {
+    use crate::storage::{MIN_PERSISTENT_EXTEND_TTL, MAX_PERSISTENT_EXTEND_TTL};
+    assert!(
+        MIN_PERSISTENT_EXTEND_TTL < MAX_PERSISTENT_EXTEND_TTL,
+        "MIN_PERSISTENT_EXTEND_TTL must be less than MAX_PERSISTENT_EXTEND_TTL"
+    );
+    // MIN should be at least 1 ledger
+    assert!(MIN_PERSISTENT_EXTEND_TTL >= 1);
+}
+
+/// Verifies that `is_assigned` returns true for an active assignment and does
+/// not crash (TTL extension is invoked internally on a live assignment).
+#[test]
+fn unit_sc001_is_assigned_extends_ttl() {
+    let t = TestEnv::new();
+    let admin = Address::generate(&t.env);
+    let maintainer = Address::generate(&t.env);
+    let contributor = Address::generate(&t.env);
+    let org = t.org("ttlorg");
+
+    t.client.initialize(&admin);
+    t.client.register_maintainer(&admin, &maintainer, &org);
+    t.client.apply_for_issue(&contributor, &org, &10u32);
+    t.client.assign_issue(&maintainer, &contributor, &org, &10u32);
+
+    // is_assigned should return true and internally trigger TTL extension
+    // without panicking (the Soroban test host handles extend_ttl on existing keys)
+    let assigned = t.client.is_assigned(&contributor, &org, &10u32);
+    assert!(assigned, "assignment must be active after assign_issue");
+}
+
+/// Verifies that `is_assigned` returns false for a non-existent assignment and
+/// does not attempt TTL extension (which would panic on a missing key).
+#[test]
+fn unit_sc001_is_assigned_no_extend_when_absent() {
+    let t = TestEnv::new();
+    let admin = Address::generate(&t.env);
+    let contributor = Address::generate(&t.env);
+    let org = t.org("noasgn");
+
+    t.client.initialize(&admin);
+
+    // No assignment exists — is_assigned must return false without panicking
+    let assigned = t.client.is_assigned(&contributor, &org, &99u32);
+    assert!(!assigned, "is_assigned must return false when no assignment exists");
+}
+
+/// Verifies that complete_assignment still works correctly after the TTL
+/// extension calls are inserted into its hot path.
+#[test]
+fn unit_sc001_complete_assignment_after_ttl_extension() {
+    let t = TestEnv::new();
+    let admin = Address::generate(&t.env);
+    let maintainer = Address::generate(&t.env);
+    let contributor = Address::generate(&t.env);
+    let org = t.org("ttlcmpl");
+
+    t.client.initialize(&admin);
+    t.client.register_maintainer(&admin, &maintainer, &org);
+    t.client.apply_for_issue(&contributor, &org, &5u32);
+    t.client.assign_issue(&maintainer, &contributor, &org, &5u32);
+    t.client.complete_assignment(&maintainer, &contributor, &org, &5u32);
+
+    assert!(!t.client.is_assigned(&contributor, &org, &5u32));
+    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
+}
+
+/// Verifies that revoke_assignment still works correctly after the TTL
+/// extension calls are inserted into its hot path.
+#[test]
+fn unit_sc001_revoke_assignment_after_ttl_extension() {
+    let t = TestEnv::new();
+    let admin = Address::generate(&t.env);
+    let maintainer = Address::generate(&t.env);
+    let contributor = Address::generate(&t.env);
+    let org = t.org("ttlrvk");
+
+    t.client.initialize(&admin);
+    t.client.register_maintainer(&admin, &maintainer, &org);
+    t.client.apply_for_issue(&contributor, &org, &8u32);
+    t.client.assign_issue(&maintainer, &contributor, &org, &8u32);
+    t.client.revoke_assignment(&maintainer, &contributor, &org, &8u32);
+
+    assert!(!t.client.is_assigned(&contributor, &org, &8u32));
+    assert_eq!(t.client.get_org_assignment_count(&contributor, &org), 0);
+}

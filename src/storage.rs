@@ -324,6 +324,49 @@ pub(crate) fn remove_assignment(
 }
 
 // ---------------------------------------------------------------------------
+// #826 — SC-001: Persistent assignment TTL extension constants and helpers
+// ---------------------------------------------------------------------------
+
+/// Minimum ledger threshold before a persistent assignment entry triggers TTL
+/// extension. ~7 days at 5 s/ledger — half of MAX to avoid redundant extends.
+pub const MIN_PERSISTENT_EXTEND_TTL: u32 = 120_960;
+
+/// Target TTL for persistent assignment entries after extension.
+/// ~30 days at 5 s/ledger, aligned with Stellar Wave network parameters.
+pub const MAX_PERSISTENT_EXTEND_TTL: u32 = 518_400;
+
+/// Extends the TTL of a persistent assignment entry.
+///
+/// Called whenever an assignment is read, validated, or transitioned so that
+/// active assignment records never expire under Soroban state rent rules.
+pub(crate) fn extend_assignment_ttl(
+    env: &Env,
+    org_id: &Symbol,
+    issue_id: u32,
+    contributor: &Address,
+) {
+    let key = assignment_entry_key(org_id, issue_id, contributor);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MIN_PERSISTENT_EXTEND_TTL, MAX_PERSISTENT_EXTEND_TTL);
+}
+
+/// Extends the TTL of a persistent org assignment count entry.
+///
+/// Called on the same paths as `extend_assignment_ttl` to keep the count
+/// and the entry entries in sync.
+pub(crate) fn extend_org_assignment_count_ttl(
+    env: &Env,
+    contributor: &Address,
+    org_id: &Symbol,
+) {
+    let key = org_assignment_count_key(contributor, org_id);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MIN_PERSISTENT_EXTEND_TTL, MAX_PERSISTENT_EXTEND_TTL);
+}
+
+// ---------------------------------------------------------------------------
 // #602 — Persistent storage: Migration flag
 // ---------------------------------------------------------------------------
 //
