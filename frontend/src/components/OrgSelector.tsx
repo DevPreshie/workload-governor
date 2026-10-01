@@ -17,6 +17,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Skeleton } from "./Skeleton";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -242,8 +243,20 @@ export function OrgSelector({ apiBase = "/api", onSelect, orgs: propOrgs }: OrgS
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
+  // Show skeleton placeholder while orgs are loading from the API
+  if (loading) {
+    return (
+      <div className="org-selector" aria-busy="true">
+        <label className="org-selector__label">Organisation</label>
+        <div role="status" aria-label="Loading organisations">
+          <Skeleton width="100%" height="2.5rem" />
+        </div>
+      </div>
+    );
+  }
+
   const displayValue = open ? query : (selectedOrg.id === "" ? "" : selectedOrg.name);
-  const placeholder = loading ? "Loading organisations…" : "Search or select an org…";
+  const placeholder = "Search or select an org…";
 
   return (
     <div
@@ -269,7 +282,6 @@ export function OrgSelector({ apiBase = "/api", onSelect, orgs: propOrgs }: OrgS
           spellCheck={false}
           value={displayValue}
           placeholder={placeholder}
-          disabled={loading}
           aria-label="Search organisations"
           aria-autocomplete="list"
           aria-controls={listboxId}
