@@ -1,31 +1,54 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import "./SlideOutRow.css";
 
 export default function SlideOutRow({
   children,
+  isRemoved = false,
   onRemoved,
+  className = "",
 }: {
   children: ReactNode;
+  isRemoved?: boolean;
   onRemoved?: () => void;
+  className?: string;
 }) {
   const [sliding, setSliding] = useState(false);
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-  function withdraw() {
+  useEffect(() => {
+    if (!isRemoved) return;
+
+    if (prefersReducedMotion) {
+      onRemoved?.();
+      return;
+    }
+
     setSliding(true);
+  }, [isRemoved, onRemoved, prefersReducedMotion]);
+
+  if (isRemoved && prefersReducedMotion) {
+    return null;
   }
 
   return (
     <div
-      // Use transform + opacity instead of max-height to avoid continuous
-      // layout recalculation on Safari (fixes #551).
-      // will-change: transform hints the GPU to promote this layer ahead of time.
-      className={sliding ? "slide-out-row" : ""}
-      style={{ willChange: sliding ? "transform, opacity" : undefined }}
-      onAnimationEnd={sliding ? onRemoved : undefined}
+      data-testid="slide-out-row-container"
+      className={`slide-out-row-container ${className}`.trim()}
+      style={{ overflowX: "hidden" }}
     >
-      {typeof children === "function"
-        ? (children as (withdraw: () => void) => ReactNode)(withdraw)
-        : children}
+      <div
+        data-testid="slide-out-row-content"
+        className={sliding ? "slide-out" : ""}
+        style={sliding ? { willChange: "transform, opacity" } : undefined}
+        onAnimationEnd={() => {
+          if (sliding) onRemoved?.();
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
