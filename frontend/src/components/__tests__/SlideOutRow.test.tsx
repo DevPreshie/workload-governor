@@ -1,91 +1,96 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+/**
+ * Tests for SlideOutRow — closes #551
+ *
+ * Verifies that the Safari-safe animation class (`slide-out-row`) is applied
+ * instead of the legacy `slide-out` class that used max-height transitions.
+ */
+import { describe, it, expect, vi } from 'vitest';
+import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
+
+// We test the component via its public API — the internal CSS class is
+// implementation detail, but we specifically assert `slide-out-row` (not
+// `slide-out`) to guard against regression of the Safari fix.
+
+// Import the component from the top-level components/ folder.
+// The path alias is not configured for these, so we use a relative path.
 import SlideOutRow from '../../../components/SlideOutRow';
 
-describe('SlideOutRow (Issue #854 / FE-019)', () => {
-  const originalMatchMedia = window.matchMedia;
-
-  afterEach(() => {
-    window.matchMedia = originalMatchMedia;
-    vi.restoreAllMocks();
-  });
-
-  function mockMatchMedia(reducedMotion: boolean) {
-    Object.defineProperty(window, 'matchMedia', {
-      writable: true,
-      value: vi.fn().mockImplementation((query: string) => ({
-        matches: query.includes('prefers-reduced-motion') ? reducedMotion : false,
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    });
-  }
-
-  it('renders children and enforces overflow-x: hidden on container', () => {
-    mockMatchMedia(false);
+describe('SlideOutRow (#551 — Safari animation fix)', () => {
+  it('renders children without slide-out-row class initially', () => {
     render(
       <SlideOutRow>
-        <div>Row content</div>
+        <span data-testid="child">content</span>
       </SlideOutRow>
     );
-
-    const container = screen.getByTestId('slide-out-row-container');
-    expect(container).toBeInTheDocument();
-    expect(container).toHaveStyle({ overflowX: 'hidden' });
-    expect(screen.getByText('Row content')).toBeInTheDocument();
+    const child = screen.getByTestId('child');
+    // The wrapping div should NOT have the animation class before withdrawal
+    expect(child.parentElement?.className).not.toContain('slide-out-row');
   });
 
-  it('removes its content immediately when reduced motion is preferred', () => {
-    mockMatchMedia(true);
-    const onRemoved = vi.fn();
-
-    const { container } = render(
-      <SlideOutRow isRemoved onRemoved={onRemoved}>
-        <div>Fade me away</div>
-      </SlideOutRow>
-    );
-
-    expect(container.firstChild).toBeNull();
-    expect(onRemoved).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText('Fade me away')).toBeNull();
-  });
-
-  it('triggers slide-out animation with will-change styles when isRemoved becomes true', () => {
-    mockMatchMedia(false);
-    const onRemoved = vi.fn();
-
+  it('applies slide-out-row (not slide-out) when withdraw is called', () => {
     render(
-      <SlideOutRow isRemoved onRemoved={onRemoved}>
-        <div>Animated row</div>
+      <SlideOutRow>
+        {(withdraw) => (
+          <button data-testid="withdraw-btn" onClick={withdraw}>
+            Withdraw
+          </button>
+        )}
       </SlideOutRow>
     );
 
-    const content = screen.getByTestId('slide-out-row-content');
-    expect(content).toHaveClass('slide-out');
-    expect(content).toHaveStyle({ willChange: 'transform, opacity' });
+    const btn = screen.getByTestId('withdraw-btn');
+    fireEvent.click(btn);
+
+    // After clicking, the wrapper should have the Safari-safe class
+    expect(btn.parentElement?.className).toContain('slide-out-row');
+    // Critically: the old max-height-based class must NOT be used
+    expect(btn.parentElement?.className).not.toContain('slide-out ');
+    expect(btn.parentElement?.className).not.toBe('slide-out');
   });
 
-  it('calls onRemoved lifecycle callback when animation ends', () => {
-    mockMatchMedia(false);
-    const onRemoved = vi.fn();
-
+  it('applies will-change: transform on the wrapper when sliding', () => {
     render(
-      <SlideOutRow isRemoved onRemoved={onRemoved}>
-        <div>Animated row</div>
+      <SlideOutRow>
+        {(withdraw) => (
+          <button data-testid="withdraw-btn" onClick={withdraw}>
+            Withdraw
+          </button>
+        )}
       </SlideOutRow>
     );
 
-    const content = screen.getByTestId('slide-out-row-content');
-    expect(onRemoved).not.toHaveBeenCalled();
+    const btn = screen.getByTestId('withdraw-btn');
+    fireEvent.click(btn);
 
-    // Fire animationend event
-    fireEvent.animationEnd(content);
+    expect(btn.parentElement?.style.willChange).toBe('transform, opacity');
+  });
+
+  it('calls onRemoved after animation ends', () => {
+    const onRemoved = vi.fn();
+    render(
+      <SlideOutRow onRemoved={onRemoved}>
+        {(withdraw) => (
+          <button data-testid="withdraw-btn" onClick={withdraw}>
+            Withdraw
+          </button>
+        )}
+      </SlideOutRow>
+    );
+
+    const btn = screen.getByTestId('withdraw-btn');
+    fireEvent.click(btn);
+    fireEvent.animationEnd(btn.parentElement!);
 
     expect(onRemoved).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders non-function children without triggering withdrawal', () => {
+    render(
+      <SlideOutRow>
+        <span data-testid="static">static content</span>
+      </SlideOutRow>
+    );
+    expect(screen.getByTestId('static')).toBeTruthy();
   });
 });
