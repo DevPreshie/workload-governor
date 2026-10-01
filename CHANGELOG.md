@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Persist indexer ledger sync checkpoints to dedicated database table `indexer_checkpoints` with transactional commit and startup recovery fallback (#849).
+- Add `docs/sast.md` documenting Semgrep SAST rules, local execution instructions, CI integration, suppression process, adding new rules, and threat model mapping. (#799)
 
 ---
 

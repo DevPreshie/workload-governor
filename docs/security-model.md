@@ -313,6 +313,7 @@ If a consumer decodes events using a stale XDR schema after a contract upgrade t
 
 ## Related Documents
 
+- [SAST (Semgrep)](./sast.md) — static analysis rules, CI integration, local execution, and threat mapping
 - [Event Schema](./event-schema.md) — emitted events and field descriptions
 - [API Reference](./api-reference.md) — function signatures and error codes
 - [Integration Guide](../INTEGRATION_GUIDE.md) — SDK integration patterns
