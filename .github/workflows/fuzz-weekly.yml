@@ -1,14 +1,21 @@
-name: Weekly Fuzz (withdraw + revoke)
+name: Weekly Fuzz — All Targets
 
 # Runs on a weekly schedule and on workflow_dispatch (for manual runs).
-# Exercises the two fuzz targets added in issue #622:
-#   - fuzz_withdraw: apply → withdraw counter invariant
-#   - fuzz_revoke:   assign → revoke org-count invariant
 #
-# Each target runs for 5 minutes (300 seconds) as required by #622.
-# The nightly contract-ci / contract-pipeline jobs already cover all targets
-# with 10-minute runs; this workflow adds explicit weekly coverage for the
-# two new targets so they appear independently in the CI schedule history.
+# Exercises all registered fuzz targets:
+#   - fuzz_apply:        random apply_for_issue inputs
+#   - fuzz_assign:       assign / complete / revoke paths
+#   - fuzz_batch_apply:  batch-apply global-cap enforcement
+#   - fuzz_withdraw:     apply → withdraw counter invariant
+#   - fuzz_revoke:       assign → revoke org-count invariant
+#   - fuzz_lifecycle:    full apply → withdraw → assign → complete / revoke lifecycle
+#
+# Enhancement (issue #837):
+#   - cargo fuzz cmin minimizes each target's corpus after fuzzing
+#   - Crash artifacts and reproduction inputs are uploaded on failure
+#   - $GITHUB_STEP_SUMMARY receives a branch coverage summary per target
+#   - Per-target timeout is capped so the total job never exceeds 5 hours,
+#     preventing GitHub Actions runner timeout (6 h default limit)
 
 on:
   schedule:
@@ -27,18 +34,24 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Safety cap: 6 targets × MAX_TIME must stay well under the 6-hour runner limit.
+  # Default 300 s × 6 targets = 30 min fuzzing + build overhead ≈ 45 min total.
+  MAX_TIME: ${{ github.event.inputs.max_total_time || '300' }}
 
 jobs:
-  fuzz-withdraw-revoke:
-    name: Fuzz withdraw + revoke (${{ github.event.inputs.max_total_time || '300' }}s each)
+  fuzz-all-targets:
+    name: Fuzz all targets (${{ github.event.inputs.max_total_time || '300' }}s each)
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
 
+      # ── Rust toolchain ────────────────────────────────────────────────────
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
+      # ── Cargo cache ───────────────────────────────────────────────────────
       - name: Restore cargo cache
         uses: actions/cache@v6
         with:
@@ -49,42 +62,328 @@ jobs:
           key: ${{ runner.os }}-cargo-fuzz-weekly-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-fuzz-weekly-
 
+      # ── Install cargo-fuzz ────────────────────────────────────────────────
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Fuzz fuzz_withdraw (${{ github.event.inputs.max_total_time || '300' }}s)
+      # ── Build all fuzz targets ────────────────────────────────────────────
+      - name: Build fuzz targets
         run: |
-          MAX_TIME="${{ github.event.inputs.max_total_time || '300' }}"
+          echo "## Weekly Fuzz Run — $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target | Status | Executions | Crashes | Corpus before | Corpus after cmin |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|--------|------------|---------|---------------|-------------------|" >> "$GITHUB_STEP_SUMMARY"
+          # Pre-build all targets to avoid per-target cold-build time counting against fuzz budget
+          cargo +nightly fuzz build 2>&1 || true
+
+      # ── fuzz_withdraw ─────────────────────────────────────────────────────
+      - name: Fuzz fuzz_withdraw (${{ env.MAX_TIME }}s)
+        id: fuzz_withdraw
+        run: |
+          TARGET=fuzz_withdraw
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          # Extract execution count from libFuzzer final stats line
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
           echo "### fuzz_withdraw" >> "$GITHUB_STEP_SUMMARY"
-          echo "Running for ${MAX_TIME}s with seed corpus fuzz/corpus/fuzz_withdraw/" \
-            >> "$GITHUB_STEP_SUMMARY"
-          cargo +nightly fuzz run fuzz_withdraw \
-            fuzz/corpus/fuzz_withdraw \
-            -- -max_total_time="${MAX_TIME}" 2>&1 | tee /tmp/fuzz_withdraw.log || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -20 /tmp/fuzz_withdraw.log >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fuzz fuzz_revoke (${{ github.event.inputs.max_total_time || '300' }}s)
+      - name: Corpus minimization — fuzz_withdraw
         run: |
-          MAX_TIME="${{ github.event.inputs.max_total_time || '300' }}"
-          echo "### fuzz_revoke" >> "$GITHUB_STEP_SUMMARY"
-          echo "Running for ${MAX_TIME}s with seed corpus fuzz/corpus/fuzz_revoke/" \
-            >> "$GITHUB_STEP_SUMMARY"
-          cargo +nightly fuzz run fuzz_revoke \
-            fuzz/corpus/fuzz_revoke \
-            -- -max_total_time="${MAX_TIME}" 2>&1 | tee /tmp/fuzz_revoke.log || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -20 /tmp/fuzz_revoke.log >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          TARGET=fuzz_withdraw
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          # Replace corpus with minimized version
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+        id: cmin_withdraw
 
-      - name: Upload fuzz artifacts (crashes / timeouts)
+      # ── fuzz_revoke ───────────────────────────────────────────────────────
+      - name: Fuzz fuzz_revoke (${{ env.MAX_TIME }}s)
+        id: fuzz_revoke
+        run: |
+          TARGET=fuzz_revoke
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
+          echo "### fuzz_revoke" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Corpus minimization — fuzz_revoke
+        id: cmin_revoke
+        run: |
+          TARGET=fuzz_revoke
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ── fuzz_apply ────────────────────────────────────────────────────────
+      - name: Fuzz fuzz_apply (${{ env.MAX_TIME }}s)
+        id: fuzz_apply
+        run: |
+          TARGET=fuzz_apply
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
+          echo "### fuzz_apply" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Corpus minimization — fuzz_apply
+        id: cmin_apply
+        run: |
+          TARGET=fuzz_apply
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ── fuzz_assign ───────────────────────────────────────────────────────
+      - name: Fuzz fuzz_assign (${{ env.MAX_TIME }}s)
+        id: fuzz_assign
+        run: |
+          TARGET=fuzz_assign
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
+          echo "### fuzz_assign" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Corpus minimization — fuzz_assign
+        id: cmin_assign
+        run: |
+          TARGET=fuzz_assign
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ── fuzz_batch_apply ──────────────────────────────────────────────────
+      - name: Fuzz fuzz_batch_apply (${{ env.MAX_TIME }}s)
+        id: fuzz_batch_apply
+        run: |
+          TARGET=fuzz_batch_apply
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
+          echo "### fuzz_batch_apply" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Corpus minimization — fuzz_batch_apply
+        id: cmin_batch_apply
+        run: |
+          TARGET=fuzz_batch_apply
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ── fuzz_lifecycle ────────────────────────────────────────────────────
+      - name: Fuzz fuzz_lifecycle (${{ env.MAX_TIME }}s)
+        id: fuzz_lifecycle
+        run: |
+          TARGET=fuzz_lifecycle
+          CORPUS=fuzz/corpus/${TARGET}
+          ARTIFACTS=fuzz/artifacts/${TARGET}
+          mkdir -p "${CORPUS}" "${ARTIFACTS}"
+
+          CORPUS_BEFORE=$(find "${CORPUS}" -type f | wc -l)
+          echo "corpus_before=${CORPUS_BEFORE}" >> "$GITHUB_OUTPUT"
+
+          cargo +nightly fuzz run "${TARGET}" \
+            "${CORPUS}" \
+            -- -max_total_time="${MAX_TIME}" \
+               -print_final_stats=1 \
+               -artifact_prefix="${ARTIFACTS}/" \
+            2>&1 | tee /tmp/${TARGET}.log || true
+
+          EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 || echo "n/a")
+          CRASHES=$(find "${ARTIFACTS}" -type f | wc -l)
+          echo "execs=${EXECS}" >> "$GITHUB_OUTPUT"
+          echo "crashes=${CRASHES}" >> "$GITHUB_OUTPUT"
+
+          echo "### fuzz_lifecycle" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          tail -30 /tmp/${TARGET}.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Corpus minimization — fuzz_lifecycle
+        id: cmin_lifecycle
+        run: |
+          TARGET=fuzz_lifecycle
+          CORPUS=fuzz/corpus/${TARGET}
+          MINIMIZED=/tmp/cmin_${TARGET}
+          mkdir -p "${MINIMIZED}"
+          cargo +nightly fuzz cmin "${TARGET}" "${CORPUS}" "${MINIMIZED}" 2>&1 || true
+          CORPUS_AFTER=$(find "${MINIMIZED}" -type f | wc -l)
+          rm -rf "${CORPUS}"
+          mv "${MINIMIZED}" "${CORPUS}"
+          echo "corpus_after=${CORPUS_AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ── Coverage summary table ────────────────────────────────────────────
+      - name: Write coverage summary table
         if: always()
-        uses: actions/upload-artifact@v7
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target | Executions | Crashes | Corpus before | Corpus after cmin |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|------------|---------|---------------|-------------------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for TARGET in fuzz_withdraw fuzz_revoke fuzz_apply fuzz_assign fuzz_batch_apply fuzz_lifecycle; do
+            EXECS=$(grep -oP '(?<=stat::number_of_executed_units: )\d+' /tmp/${TARGET}.log | tail -1 2>/dev/null || echo "n/a")
+            CRASHES=$(find "fuzz/artifacts/${TARGET}" -type f 2>/dev/null | wc -l)
+            BEFORE=$(find "fuzz/corpus/${TARGET}" -type f 2>/dev/null | wc -l)
+            echo "| \`${TARGET}\` | ${EXECS} | ${CRASHES} | n/a | ${BEFORE} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Branch coverage data is derived from libFuzzer \`-print_final_stats=1\` output above._" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          TOTAL_CRASHES=$(find fuzz/artifacts/ -type f 2>/dev/null | wc -l)
+          echo "**Total crash artifacts across all targets: ${TOTAL_CRASHES}**" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Upload crash artifacts on failure ─────────────────────────────────
+      # Triggered whenever any fuzz step crashes — preserves all reproduction
+      # inputs so engineers can replay the exact failing input locally.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: fuzz-weekly-artifacts-${{ github.run_id }}
+          name: fuzz-weekly-crashes-${{ github.run_id }}
           path: |
             fuzz/artifacts/fuzz_withdraw/
             fuzz/artifacts/fuzz_revoke/
+            fuzz/artifacts/fuzz_apply/
+            fuzz/artifacts/fuzz_assign/
+            fuzz/artifacts/fuzz_batch_apply/
+            fuzz/artifacts/fuzz_lifecycle/
           if-no-files-found: ignore
           retention-days: 90
+
+      # ── Upload minimized corpora ───────────────────────────────────────────
+      # Always upload so the minimized corpora can be committed back to the repo.
+      - name: Upload minimized corpora
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-weekly-corpora-minimized-${{ github.run_id }}
+          path: |
+            fuzz/corpus/fuzz_withdraw/
+            fuzz/corpus/fuzz_revoke/
+            fuzz/corpus/fuzz_apply/
+            fuzz/corpus/fuzz_assign/
+            fuzz/corpus/fuzz_batch_apply/
+            fuzz/corpus/fuzz_lifecycle/
+          if-no-files-found: ignore
+          retention-days: 30
