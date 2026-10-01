@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Instrument Horizon and Soroban RPC calls in `backend/src/HorizonService.ts` with OpenTelemetry spans and collector service in `docker-compose.yml` (#850).
+- Implement keyboard Escape key dismissal and focus restoration upon modal dismissal or unmount in `TxConfirmModal` (#852).
 
 ---
 

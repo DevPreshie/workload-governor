@@ -25,7 +25,10 @@ function actionIcon(action: string, destructive?: boolean): string {
 export default function TxConfirmModal({ modal }: Props) {
   const { state, _resolve, _reject, close } = modal;
   const dialogRef      = useRef<HTMLDivElement>(null);
+  const sheetRef       = useRef<HTMLDivElement>(null);
   const previousFocus  = useRef<HTMLElement | null>(null);
+  const touchStartY    = useRef<number | null>(null);
+  const touchCurrentY  = useRef<number | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const isOpen    = state.status !== "idle";
@@ -46,23 +49,38 @@ export default function TxConfirmModal({ modal }: Props) {
   // ── Focus management ────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
-      previousFocus.current = document.activeElement as HTMLElement;
+      if (!previousFocus.current) {
+        previousFocus.current = document.activeElement as HTMLElement;
+      }
       document.body.style.overflow = "hidden";
       requestAnimationFrame(() => {
-        const first = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE)[0];
+        const first = (dialogRef.current ?? sheetRef.current)?.querySelectorAll<HTMLElement>(FOCUSABLE)[0];
         first?.focus();
       });
     } else {
       document.body.style.overflow = "";
-      previousFocus.current?.focus();
+      if (previousFocus.current) {
+        previousFocus.current.focus();
+        previousFocus.current = null;
+      }
     }
+    return () => {
+      document.body.style.overflow = "";
+      if (previousFocus.current) {
+        previousFocus.current.focus();
+        previousFocus.current = null;
+      }
+    };
   }, [isOpen]);
 
   // ── Escape key ──────────────────────────────────────────────
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape" && !isLoading) _reject();
+      if (e.key === "Escape" && !isLoading) {
+        e.preventDefault();
+        _reject();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
