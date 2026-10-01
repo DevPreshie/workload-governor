@@ -1,298 +1,89 @@
-/**
- * eventIndexer.ts
- *
- * Polls the Soroban RPC node every 5 seconds for WorkloadGovernor contract events,
- * parses them into typed DB records, and persists them with deduplication.
- *
- * Supported event types (matching src/events.rs emit helpers):
- *   applied, withdrew, assigned, completed, revoked, maintainer_registered
- *
- * Deduplication key: (ledger_sequence, transaction_hash, event_index) —
- *   INSERT … ON CONFLICT DO NOTHING prevents duplicate rows even after a
- *   full-history replay caused by cursor loss (fixes issue #575).
- *
- * Resume: on startup, reads the highest ledger already stored and continues
- *   from there, relying on the unique constraint to skip already-seen events.
- */
-
-import { SorobanRpc, xdr as stellarXdr, scValToNative } from '@stellar/stellar-sdk';
-import { pool, getCheckpoint, saveCheckpoint } from './db';
+import { SorobanRpc } from '@stellar/stellar-sdk';
+import { pool } from './db';
 import { logger } from './logger';
-import { publishLiveEvent } from './services/event-bus';
-import { getCache, setCache } from './services/redis';
+import redis, { closeRedis } from './services/redis';
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-const CONTRACT_ID =
-  process.env['CONTRACT_ID'] ??
-  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
-
-const RPC_URL =
-  process.env['SOROBAN_RPC_URL'] ?? 'https://soroban-testnet.stellar.org';
-
-const POLL_INTERVAL_MS = 5_000;
-const ERROR_BACKOFF_MS = 10_000;
-
-// ---------------------------------------------------------------------------
-// Event types
-// ---------------------------------------------------------------------------
-
-export type ContractEventType =
-  | 'applied'
-  | 'withdrew'
-  | 'assigned'
-  | 'completed'
-  | 'revoked'
-  | 'maintainer_registered';
-
-/**
- * Normalized DB record for a single contract event.
- * Stored in the `contract_events` table.
- */
-export interface ContractEventRecord {
-  event_type: ContractEventType;
-  contributor: string | null;
-  org_id: string | null;
-  issue_id: number | null;
-  tx_hash: string;
-  event_index: number;
+interface ContractEvent {
+  type: string;
   ledger: number;
   timestamp: Date;
+  actor: string;
+  orgId: string;
+  issueId?: number;
+  contributor?: string;
+  data?: Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// XDR helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Safely decode an XDR base64 string to its native JS value.
- * Returns null if decoding fails.
- */
-function decodeScVal(xdrBase64: string): unknown {
-  try {
-    if (xdrBase64.length > 65_536) return null;
-    const scVal = stellarXdr.ScVal.fromXDR(xdrBase64, 'base64');
-    return scValToNative(scVal);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Extract the symbol string from a Soroban ScVal topic (first topic slot).
- * The event type is emitted as a Symbol in slot[0].
- */
-function extractEventType(topics: string[]): ContractEventType | null {
-  if (topics.length === 0) return null;
-  const val = decodeScVal(topics[0]);
-  if (typeof val !== 'string') return null;
-  const known: ContractEventType[] = [
-    'applied',
-    'withdrew',
-    'assigned',
-    'completed',
-    'revoked',
-    'maintainer_registered',
-  ];
-  return known.includes(val as ContractEventType) ? (val as ContractEventType) : null;
-}
-
-/**
- * Extract the contributor address from a Soroban ScVal topic (second topic slot).
- * For all 5 state-change events the contributor is in topics[1].
- */
-function extractContributorFromTopic(topics: string[]): string | null {
-  if (topics.length < 2) return null;
-  const val = decodeScVal(topics[1]);
-  if (typeof val === 'string') return val;
-  return null;
-}
-
-/**
- * Parse the data value tuple emitted with each event.
- *
- * Event data layouts (from src/events.rs):
- *   applied    → data = (org_id: Symbol, issue_id: u32)
- *   withdrew   → data = (org_id: Symbol, issue_id: u32)
- *   assigned   → data = (maintainer: Address, org_id: Symbol, issue_id: u32)
- *   completed  → data = (maintainer: Address, org_id: Symbol, issue_id: u32)
- *   revoked    → data = (maintainer: Address, org_id: Symbol, issue_id: u32)
- *   maintainer_registered → data = org_id: Symbol (scalar, not tuple)
- */
-interface ParsedData {
-  org_id: string | null;
-  issue_id: number | null;
-}
-
-function parseEventData(dataXdr: string, eventType: ContractEventType): ParsedData {
-  const raw = decodeScVal(dataXdr);
-
-  if (eventType === 'maintainer_registered') {
-    // data is a plain Symbol
-    return {
-      org_id: typeof raw === 'string' ? raw : null,
-      issue_id: null,
-    };
-  }
-
-  // All other events emit a tuple
-  if (!Array.isArray(raw)) {
-    return { org_id: null, issue_id: null };
-  }
-
-  if (eventType === 'applied' || eventType === 'withdrew') {
-    // (org_id, issue_id)
-    const [orgId, issueId] = raw as [unknown, unknown];
-    return {
-      org_id: typeof orgId === 'string' ? orgId : null,
-      issue_id: typeof issueId === 'number' ? issueId : null,
-    };
-  }
-
-  // assigned / completed / revoked → (maintainer, org_id, issue_id)
-  const [, orgId, issueId] = raw as [unknown, unknown, unknown];
-  return {
-    org_id: typeof orgId === 'string' ? orgId : null,
-    issue_id: typeof issueId === 'number' ? issueId : null,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// RPC event shape (SDK v11 / RPC spec)
-// ---------------------------------------------------------------------------
-
-interface RpcEvent {
-  /** "contract" | "system" | "diagnostic" */
+interface EventData {
   type: string;
-  /** "<ledger>-<tx_index>-<event_index>" — paging cursor */
+  xdr: string;
+}
+
+interface ContractEventResource {
+  type: string;
   id: string;
   pagingToken: string;
-  /** ledger sequence number as string */
   ledger: string;
-  /** ISO-8601 creation timestamp */
   createdAt: string;
-  txHash?: string;
-  topic: Array<{ type: string; xdr: string }>;
-  value: { type: string; xdr: string };
+  topic: EventData[];
+  value: EventData[];
 }
 
-// ---------------------------------------------------------------------------
-// EventIndexer class
-// ---------------------------------------------------------------------------
+const CONTRACT_ID =
+  process.env.CONTRACT_ID ??
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
+
+const RPC_URL = process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+
+/** Redis key used for distributed leader election among indexer replicas. */
+const LEADER_LOCK_KEY = 'lock:indexer_leader';
 
 export class EventIndexer {
   private server: SorobanRpc.Server;
-  /** Paging cursor for the next RPC call. Undefined means start from resume ledger. */
   private cursor: string | undefined;
   private isRunning = false;
-  private lastCheckpointLedger: number = 0;
-  private lastCheckpointTime: number = Date.now();
+  /** Resolves when the poll loop has fully exited after stop() is called. */
+  private shutdownPromise: Promise<void> | null = null;
+  private shutdownResolve: (() => void) | null = null;
 
   constructor() {
     this.server = new SorobanRpc.Server(RPC_URL, { allowHttp: true });
   }
 
-  // ── Lifecycle ────────────────────────────────────────────────────────────
-
   async start(): Promise<void> {
-    if (this.isRunning) return;
+    if (this.isRunning) {
+      return;
+    }
+
     this.isRunning = true;
 
-    // Resume from the last successfully indexed ledger
-    await this.initCursor();
-
-    logger.info({ message: 'Event indexer started', contract: CONTRACT_ID, rpc: RPC_URL });
-
-    this.pollForEvents().catch((err) => {
-      logger.error({
-        message: 'Event indexer fatal error',
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-      this.isRunning = false;
+    // Set up a promise that resolves once the poll loop has drained.
+    this.shutdownPromise = new Promise<void>((resolve) => {
+      this.shutdownResolve = resolve;
     });
-  }
 
-  stop(): void {
-    this.isRunning = false;
-    logger.info({ message: 'Event indexer stopped' });
-  }
+    logger.info({ message: 'Event indexer started' });
 
-  // ── Cursor / resume ──────────────────────────────────────────────────────
-
-  /**
-   * On restart, re-process from the last confirmed checkpoint.
-   * Priority:
-   *   1. Redis cache checkpoint (`indexer:checkpoint:<contractId>`)
-   *   2. Database table `indexer_checkpoints` if Redis cache is empty / evicted
-   *   3. `MAX(ledger_seq)` from `contract_events`
-   *   4. Genesis
-   */
-  private async initCursor(): Promise<void> {
-    try {
-      let resumeLedger: number | null = null;
-
-      // 1. Try Redis cache first
-      try {
-        const cached = await getCache<number | { last_ledger: number }>(`indexer:checkpoint:${CONTRACT_ID}`);
-        if (cached !== null && cached !== undefined) {
-          const num = typeof cached === 'number' ? cached : cached.last_ledger;
-          if (typeof num === 'number' && num > 0) {
-            resumeLedger = num;
-            logger.info({ message: 'Resuming indexer from Redis cache checkpoint', ledger: resumeLedger });
-          }
+    this.pollForEvents()
+      .catch((err) => {
+        logger.error({
+          message: 'Event indexer error',
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      })
+      .finally(() => {
+        // Signal that the loop has exited (whether naturally or via error).
+        if (this.shutdownResolve) {
+          this.shutdownResolve();
         }
-      } catch {
-        // Cache miss or Redis unavailable
-      }
-
-      // 2. If Redis cache is empty, resume from database checkpoint table
-      if (resumeLedger === null) {
-        try {
-          const dbCheckpoint = await getCheckpoint(CONTRACT_ID, pool);
-          if (dbCheckpoint && dbCheckpoint.last_ledger > 0) {
-            resumeLedger = dbCheckpoint.last_ledger;
-            logger.info({ message: 'Resuming indexer from database checkpoint', ledger: resumeLedger });
-          }
-        } catch {
-          // Table might not exist yet or query failed
-        }
-      }
-
-      // 3. Fall back to MAX(ledger_seq) from contract_events
-      if (resumeLedger === null) {
-        const { rows } = await pool.query<{ max_ledger: string | null }>(
-          'SELECT MAX(ledger_seq) AS max_ledger FROM contract_events',
-        );
-        resumeLedger = rows[0]?.max_ledger != null ? parseInt(rows[0].max_ledger, 10) : null;
-      }
-
-      if (resumeLedger !== null && resumeLedger > 0) {
-        this.cursor = String(resumeLedger);
-        this.lastCheckpointLedger = resumeLedger;
-        logger.info({ message: 'Resuming indexer from ledger', ledger: resumeLedger });
-      } else {
-        this.cursor = undefined;
-        logger.info({ message: 'Starting indexer from genesis (no stored events)' });
-      }
-    } catch (err) {
-      // Table might not exist yet; start from genesis
-      logger.warn({
-        message: 'Could not read resume ledger, starting from genesis',
-        error: err instanceof Error ? err.message : String(err),
       });
-      this.cursor = undefined;
-    }
   }
-
-  // ── Poll loop ────────────────────────────────────────────────────────────
 
   private async pollForEvents(): Promise<void> {
     while (this.isRunning) {
       try {
-        const response = await this.server.getEvents({
+        const events = await this.server.getEvents({
           filters: [
             {
               type: 'contract',
@@ -300,219 +91,244 @@ export class EventIndexer {
             },
           ],
           cursor: this.cursor,
-          limit: 200,
         });
 
-        const events = response.events as unknown as RpcEvent[];
-
-        if (events.length > 0) {
-          let persisted = 0;
-          let skipped = 0;
-
-          for (const raw of events) {
-            const record = this.parseRpcEvent(raw);
-            if (!record) {
-              skipped++;
-              continue;
+        if (events.events.length > 0) {
+          for (const event of events.events as unknown[]) {
+            try {
+              const parsed = this.parseEvent(event as ContractEventResource);
+              if (parsed) {
+                await this.storeEvent(parsed);
+              }
+            } catch (err) {
+              logger.error({
+                message: 'Failed to parse event',
+                error: err instanceof Error ? err.message : String(err),
+              });
             }
-            const stored = await this.storeEvent(record);
-            if (stored) persisted++;
-            else skipped++;
           }
-
-          // Advance cursor to the last event's pagingToken
-          const last = events[events.length - 1];
-          this.cursor = last.pagingToken ?? last.id;
-          const lastLedger = parseInt(last.ledger, 10);
-
+          const lastEvent = events.events[events.events.length - 1] as unknown as ContractEventResource;
+          this.cursor = lastEvent.pagingToken;
           logger.info({
-            message: 'Indexed event batch',
-            ledger: lastLedger,
-            total: events.length,
-            persisted,
-            skipped,
+            message: 'Ledger batch processed',
+            ledger: lastEvent.ledger,
+            eventCount: events.events.length,
           });
-
-          // Commit checkpoint every 5 seconds or upon every 100 ledgers
-          const now = Date.now();
-          if (
-            lastLedger - this.lastCheckpointLedger >= 100 ||
-            now - this.lastCheckpointTime >= 5_000
-          ) {
-            await this.commitCheckpointTransaction(lastLedger, last.txHash);
-            this.lastCheckpointLedger = lastLedger;
-            this.lastCheckpointTime = now;
-          }
         }
 
-        await sleep(POLL_INTERVAL_MS);
+        // Only sleep if we are still running; a stop() during sleep is fine
+        // because the while-condition is re-checked on the next iteration.
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       } catch (err) {
         logger.error({
           message: 'Event polling error',
           error: err instanceof Error ? err.message : String(err),
         });
-        await sleep(ERROR_BACKOFF_MS);
+        await new Promise((resolve) => setTimeout(resolve, 10000));
       }
     }
   }
 
-  /**
-   * Commit confirmed ledger progress to database transactionally.
-   */
-  async commitCheckpointTransaction(ledger: number, hash?: string): Promise<void> {
-    const client = await pool.connect();
+  private parseEvent(event: ContractEventResource): ContractEvent | null {
     try {
-      await client.query('BEGIN');
-      await saveCheckpoint(CONTRACT_ID, ledger, hash ?? null, client);
-      await client.query('COMMIT');
+      const topics = event.topic || [];
+      const values = event.value || [];
 
-      // Update Redis cache as well
-      try {
-        await setCache(`indexer:checkpoint:${CONTRACT_ID}`, ledger, 3600);
-      } catch {
-        // Non-fatal
+      if (topics.length === 0) {
+        return null;
       }
-    } catch (err) {
-      await client.query('ROLLBACK');
-      logger.error({
-        message: 'Failed to commit ledger checkpoint transaction',
-        error: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      client.release();
-    }
-  }
 
-  // ── Event parsing ────────────────────────────────────────────────────────
+      const eventType = this.extractEventType(topics);
+      if (!eventType) {
+        return null;
+      }
 
-  /**
-   * Convert a raw RPC event object into a ContractEventRecord.
-   * Returns null if the event is unknown or malformed.
-   */
-  private parseRpcEvent(raw: RpcEvent): ContractEventRecord | null {
-    try {
-      // Only process contract events
-      if (raw.type !== 'contract') return null;
-
-      const topics = raw.topic?.map((t) => t.xdr) ?? [];
-      const dataXdr = raw.value?.xdr ?? '';
-
-      const eventType = extractEventType(topics);
-      if (!eventType) return null;
-
-      const contributor =
-        eventType === 'maintainer_registered'
-          ? null
-          : extractContributorFromTopic(topics);
-
-      const { org_id, issue_id } = parseEventData(dataXdr, eventType);
-
-      // Parse the event index from the id string: "<ledger>-<tx_index>-<event_index>"
-      const idParts = raw.id.split('-');
-      const eventIndex = idParts.length >= 3 ? parseInt(idParts[2], 10) : 0;
-
-      // tx_hash may be undefined for some synthetic events; fall back to id
-      const txHash = raw.txHash ?? raw.id;
-
-      const ledger = parseInt(raw.ledger, 10);
-      const timestamp = new Date(raw.createdAt);
+      const ledger = parseInt(event.ledger, 10);
+      const timestamp = new Date(event.createdAt);
+      const actor = this.extractActor(values);
+      const orgId = this.extractOrgId(values);
 
       return {
-        event_type: eventType,
-        contributor,
-        org_id,
-        issue_id,
-        tx_hash: txHash,
-        event_index: eventIndex,
+        type: eventType,
         ledger,
         timestamp,
+        actor,
+        orgId,
+        issueId: this.extractIssueId(values),
+        contributor: this.extractContributor(values),
+        data: {
+          topics: topics.map((t: EventData) => t),
+          values: values.map((v: EventData) => v),
+        },
       };
     } catch {
       return null;
     }
   }
 
-  // ── Persistence ──────────────────────────────────────────────────────────
+  private extractEventType(topics: EventData[]): string | null {
+    if (topics.length === 0) return null;
+    const topicXdr = topics[0].xdr;
+    if (topicXdr.includes('applied')) return 'applied';
+    if (topicXdr.includes('withdrawn')) return 'withdrawn';
+    if (topicXdr.includes('assigned')) return 'assigned';
+    if (topicXdr.includes('completed')) return 'completed';
+    if (topicXdr.includes('revoked')) return 'revoked';
+    return null;
+  }
 
-  /**
-   * Insert a contract event record.
-   *
-   * Uses (ledger_seq, tx_hash, event_index) as the deduplication key.
-   * Duplicate rows are silently skipped (ON CONFLICT DO NOTHING).
-   *
-   * This is safe to call after a full-history replay caused by cursor loss:
-   * the unique constraint added in migration 2_event_deduplication.js
-   * prevents duplicates at the database level regardless of how many times
-   * the same event is re-submitted (fixes issue #575).
-   *
-   * @returns true if a new row was inserted, false if it was a duplicate.
-   */
-  private async storeEvent(record: ContractEventRecord): Promise<boolean> {
-    const result = await pool.query(
-      `INSERT INTO contract_events
-         (event_type, contributor, org_id, issue_id, tx_hash, event_index, ledger_seq, timestamp)
+  private extractActor(values: EventData[]): string {
+    return values.length > 0 ? values[0].xdr.substring(0, 20) : 'unknown';
+  }
+
+  private extractOrgId(values: EventData[]): string {
+    return values.length > 1 ? values[1].xdr.substring(0, 20) : 'unknown';
+  }
+
+  private extractIssueId(values: EventData[]): number | undefined {
+    if (values.length > 2) {
+      const match = values[2].xdr.match(/\d+/);
+      return match ? parseInt(match[0], 10) : undefined;
+    }
+    return undefined;
+  }
+
+  private extractContributor(values: EventData[]): string | undefined {
+    return values.length > 3 ? values[3].xdr.substring(0, 20) : undefined;
+  }
+
+  private async storeEvent(event: ContractEvent): Promise<void> {
+    await pool.query(
+      `INSERT INTO contract_events (event_type, ledger_seq, timestamp, actor, org_id, issue_id, contributor, data)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (ledger_seq, tx_hash, event_index) DO NOTHING`,
+       ON CONFLICT DO NOTHING`,
       [
-        record.event_type,
-        record.contributor,
-        record.org_id,
-        record.issue_id,
-        record.tx_hash,
-        record.event_index,
-        record.ledger,
-        record.timestamp,
+        event.type,
+        event.ledger,
+        event.timestamp,
+        event.actor,
+        event.orgId,
+        event.issueId || null,
+        event.contributor || null,
+        JSON.stringify(event.data),
       ],
     );
+  }
 
-    const inserted = (result as { rowCount?: number }).rowCount === 1;
+  /**
+   * Signal the poll loop to stop after the current batch completes, then
+   * release the Redis leader lock and close the DB pool so a new replica
+   * can acquire the lock without waiting for the TTL to expire.
+   */
+  async stopGracefully(): Promise<void> {
+    if (!this.isRunning) {
+      return;
+    }
 
-    if (inserted) {
-      // Publish live update for real-time subscribers
-      const liveType =
-        record.event_type === 'applied'
-          ? 'application_created'
-          : record.event_type === 'assigned'
-            ? 'assignment_created'
-            : 'cap_updated';
+    logger.info({ message: 'Graceful shutdown initiated — waiting for current batch to finish' });
+    this.isRunning = false;
 
-      publishLiveEvent({
-        type: liveType,
-        data: {
-          eventType: record.event_type,
-          orgId: record.org_id,
-          issueId: record.issue_id,
-        },
+    // Wait for the poll loop to finish processing its current batch.
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
+    }
+
+    // Explicitly release the distributed leader lock so a new replica can
+    // take over immediately without waiting for the TTL to expire.
+    try {
+      await redis.del(LEADER_LOCK_KEY);
+      logger.info({ message: 'Redis leader lock released', key: LEADER_LOCK_KEY });
+    } catch (err) {
+      logger.error({
+        message: 'Failed to release Redis leader lock',
+        error: err instanceof Error ? err.message : String(err),
       });
     }
 
-    return inserted;
+    // Close the Redis connection.
+    try {
+      await closeRedis();
+      logger.info({ message: 'Redis connection closed' });
+    } catch (err) {
+      logger.error({
+        message: 'Error closing Redis connection',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Close the Postgres pool.
+    try {
+      await pool.end();
+      logger.info({ message: 'Database pool closed' });
+    } catch (err) {
+      logger.error({
+        message: 'Error closing database pool',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    logger.info({ message: 'Event indexer shutdown complete' });
+  }
+
+  /** Synchronous stop — does NOT release the Redis lock or drain connections.
+   *  Prefer stopGracefully() for production use. */
+  stop(): void {
+    this.isRunning = false;
+    logger.info({ message: 'Event indexer stopped' });
   }
 }
 
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ---------------------------------------------------------------------------
-// Module-level singleton helpers
-// ---------------------------------------------------------------------------
-
-let _indexer: EventIndexer | null = null;
+let indexer: EventIndexer | null = null;
 
 export function getEventIndexer(): EventIndexer {
-  if (!_indexer) _indexer = new EventIndexer();
-  return _indexer;
+  if (!indexer) {
+    indexer = new EventIndexer();
+  }
+  return indexer;
 }
 
 export async function startEventIndexer(): Promise<void> {
-  await getEventIndexer().start();
+  const idx = getEventIndexer();
+  await idx.start();
 }
 
 export function stopEventIndexer(): void {
-  _indexer?.stop();
+  if (indexer) {
+    indexer.stop();
+  }
+}
+
+/**
+ * Register SIGINT / SIGTERM handlers for graceful shutdown.
+ * Call this once from src/index.ts after startEventIndexer().
+ */
+export function registerShutdownHandlers(): void {
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info({ message: `${signal} received — starting graceful shutdown` });
+
+    const idx = getEventIndexer();
+    await idx.stopGracefully();
+
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => {
+    shutdown('SIGTERM').catch((err) => {
+      logger.error({
+        message: 'Error during SIGTERM shutdown',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(1);
+    });
+  });
+
+  process.on('SIGINT', () => {
+    shutdown('SIGINT').catch((err) => {
+      logger.error({
+        message: 'Error during SIGINT shutdown',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(1);
+    });
+  });
 }
