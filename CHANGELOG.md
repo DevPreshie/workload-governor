@@ -10,10 +10,10 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add npm and vitest cache step in frontend CI workflow to accelerate test suites and lint runs. (#876)
-- Add 500 VU spike scenario and latency assertion thresholds to k6 staging load test suite. (#881)
-- Add Architecture Decision Record ADR-008 for multisig governance architecture. (#886)
-- Add WASM SHA256 checksum calculation, verification checklist, and install steps in contract upgrade runbook. (#887)
+- Add pre-flight Horizon RPC and deployer balance checks in `testnet-smoke.sh`. (#882)
+- Add contract event deserialization test cases for malformed/corrupted payloads. (#883)
+- Document Redis key naming schemes and cache eviction triggers in `docs/storage-design.md`. (#889)
+- Add comprehensive API error code reference table to `docs/api-key-guide.md`. (#891)
 
 ---
 

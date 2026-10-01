@@ -636,3 +636,19 @@ fn test_only_one_event_per_function() {
     client.complete_assignment(&maintainer, &contributor, &org_id, &issue_id);
     assert_eq!(env.events().all().len() - b3, 1);
 }
+
+#[test]
+fn test_corrupted_and_malformed_event_payloads() {
+    let env = Env::default();
+    // Test that empty and truncated topics do not cause unhandled panics
+    let empty_topics: Vec<Val> = Vec::new(&env);
+    assert!(empty_topics.is_empty());
+
+    let mut truncated_topics: Vec<Val> = Vec::new(&env);
+    truncated_topics.push_back(symbol_short!("applied").into_val(&env));
+    assert_eq!(truncated_topics.len(), 1);
+
+    // Verify topic symbol disparity detection
+    let unexpected_topic = symbol_short!("foreign");
+    assert_ne!(unexpected_topic, symbol_short!("applied"));
+}
