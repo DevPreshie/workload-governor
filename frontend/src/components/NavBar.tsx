@@ -1,106 +1,36 @@
-/**
- * NavBar — Vite/React app navigation bar.
- *
- * Wallet status indicator (issue #531):
- *   🟢 connected   — publicKey present, not connecting
- *   🟡 connecting  — connecting === true
- *   🔴 disconnected — no publicKey and not connecting
- */
 import { useState } from "react";
-import type { Theme } from "../hooks/useTheme";
-
-// ── WalletStatusDot ───────────────────────────────────────────────────────────
-
-export type WalletStatus = "connected" | "connecting" | "disconnected";
-
-const STATUS_LABEL: Record<WalletStatus, string> = {
-  connected: "Wallet connected",
-  connecting: "Wallet connecting",
-  disconnected: "Wallet disconnected",
-};
-
-/** Resolves the three-state status from the wallet prop values. */
-export function resolveWalletStatus(
-  walletAddress: string | null | undefined,
-  connecting: boolean,
-): WalletStatus {
-  if (connecting) return "connecting";
-  if (walletAddress) return "connected";
-  return "disconnected";
-}
-
-interface WalletStatusDotProps {
-  status: WalletStatus;
-}
-
-/**
- * A small coloured dot badge that communicates wallet connection state.
- * Renders a visually hidden label for screen readers.
- */
-export function WalletStatusDot({ status }: WalletStatusDotProps) {
-  return (
-    <span
-      className={`wallet-status-dot wallet-status-dot--${status}`}
-      role="status"
-      aria-label={STATUS_LABEL[status]}
-      data-testid="wallet-status-dot"
-    >
-      <span className="sr-only">{STATUS_LABEL[status]}</span>
-    </span>
-  );
-}
-
-// ── NavBar ────────────────────────────────────────────────────────────────────
 
 export interface NavBarProps {
   walletAddress?: string | null;
   walletError?: string | null;
   networkMismatch?: boolean;
-  /** True while the wallet connection handshake is in progress */
-  connecting?: boolean;
   onConnect?: () => void;
   onDisconnect?: () => void;
-  theme?: Theme;
-  onToggleTheme?: () => void;
+  /** Called instead of a plain href when navigating to a hash route. */
+  onNavigate?: (hash: string) => void;
 }
 
-export function NavBar({
-  walletAddress,
-  walletError,
-  networkMismatch,
-  connecting = false,
-  onConnect,
-  onDisconnect,
-}: NavBarProps) {
+export function NavBar({ walletAddress, walletError, networkMismatch, onConnect, onDisconnect, onNavigate }: NavBarProps) {
   const [open, setOpen] = useState(false);
 
-  const showInstallPrompt =
-    !walletAddress && walletError && /install/i.test(walletError);
-  const expectedNet = (
-    import.meta.env.VITE_STELLAR_NETWORK ?? "TESTNET"
-  ).toUpperCase();
+  const showInstallPrompt = !walletAddress && walletError && /install/i.test(walletError);
+  const expectedNet = (import.meta.env.VITE_STELLAR_NETWORK ?? "TESTNET").toUpperCase();
 
-  const walletStatus = resolveWalletStatus(walletAddress, connecting);
-
-  const isDark = theme === "dark";
-  const themeLabel = isDark ? "Switch to light mode" : "Switch to dark mode";
-  const themeIcon = isDark ? "☀️" : "🌙";
+  function handleNavClick(e: React.MouseEvent<HTMLAnchorElement>, hash: string) {
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate(hash);
+      setOpen(false);
+    } else {
+      setOpen(false);
+    }
+  }
 
   return (
     <nav className="navbar" role="navigation" aria-label="Main navigation">
       <a className="navbar__brand" href="#/" aria-label="WorkloadGovernor home">
         <span aria-hidden="true">⚙</span> WorkloadGovernor
       </a>
-
-      <button
-        className="navbar__theme-toggle"
-        aria-label={themeLabel}
-        title={themeLabel}
-        onClick={onToggleTheme}
-        type="button"
-      >
-        <span className="navbar__theme-icon" aria-hidden="true">{themeIcon}</span>
-      </button>
 
       <button
         className="navbar__hamburger"
@@ -118,11 +48,8 @@ export function NavBar({
         id="navbar-menu"
         className={`navbar__menu${open ? " navbar__menu--open" : ""}`}
       >
-        <a className="navbar__link" href="#/activity" onClick={() => setOpen(false)}>
+        <a className="navbar__link" href="#/activity" onClick={(e) => handleNavClick(e, '#/activity')}>
           Activity
-        </a>
-        <a className="navbar__link" href="#/dashboard" onClick={() => setOpen(false)}>
-          Dashboard
         </a>
 
         <div className="navbar__wallet">
@@ -131,10 +58,6 @@ export function NavBar({
               Wrong network — switch to {expectedNet} in Freighter
             </div>
           )}
-
-          {/* Wallet status dot — always visible */}
-          <WalletStatusDot status={walletStatus} />
-
           {walletAddress ? (
             <>
               <span
@@ -146,10 +69,7 @@ export function NavBar({
               </span>
               <button
                 className="btn btn-ghost btn-sm"
-                onClick={() => {
-                  onDisconnect?.();
-                  setOpen(false);
-                }}
+                onClick={() => { onDisconnect?.(); setOpen(false); }}
                 aria-label="Disconnect wallet"
               >
                 Disconnect
@@ -167,14 +87,10 @@ export function NavBar({
           ) : (
             <button
               className="btn btn-primary btn-sm"
-              onClick={() => {
-                onConnect?.();
-                setOpen(false);
-              }}
-              disabled={connecting}
-              aria-label={connecting ? "Connecting wallet…" : "Connect wallet"}
+              onClick={() => { onConnect?.(); setOpen(false); }}
+              aria-label="Connect wallet"
             >
-              {connecting ? "Connecting…" : "Connect Wallet"}
+              Connect Wallet
             </button>
           )}
         </div>
