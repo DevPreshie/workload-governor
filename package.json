@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts' --max-warnings 0",
+    "lint:security": "semgrep --config .semgrep.yml --severity ERROR --error src/ backend/src/",
     "typecheck": "tsc --noEmit",
     "migrate:up": "node-pg-migrate up --migrations-dir migrations --migrations-table pgmigrations",
     "migrate:down": "node-pg-migrate down --migrations-dir migrations --migrations-table pgmigrations",
