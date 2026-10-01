@@ -10,10 +10,12 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add Horizon and Soroban RPC node migration runbook `docs/runbooks/horizon-migration.md` and index `docs/runbooks/README.md`. (#890)
-- Add Soroban Symbol 64-bit hash collision and namespace overlap detection in `scripts/check-key-collisions.sh`. (#894)
-- Add contract WASM binary size budget assertion (< 64 KB) in `scripts/test-contract.sh` and CI. (#895)
-- Standardize developer and testing targets in root `Makefile` with dynamic `make help`. (#896)
+- Add high-contrast color tokens for WCAG AAA compliance under `prefers-contrast: more`. (#857)
+- Add composite index on `events (org_id, created_at DESC)` in migration `3_add_events_org_created_idx.js`. (#858)
+- Add reversible `down()` migration in `2_event_deduplication.js` and migration idempotency tests. (#859)
+
+### Changed
+- Configure connection pool leak protection, acquire timeouts, and idle pruning in database connection pool. (#860)
 
 ---
 

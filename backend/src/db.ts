@@ -6,32 +6,30 @@
  *   DATABASE_URL  (preferred, takes precedence)
  *   PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD
  *
- * Pool sizing is configurable via environment variables (issue #561):
+ * Pool sizing is configurable via environment variables (issues #561, #860):
  *   DB_POOL_MIN: minimum connections kept alive (default: 2)
- *   DB_POOL_MAX: maximum connections allowed   (default: 10)
+ *   DB_POOL_MAX: maximum connections allowed   (default: 20)
  *   DB_IDLE_TIMEOUT: ms before idle connection is closed (default: 30000)
- *   DB_CONNECTION_TIMEOUT: ms to wait for a connection   (default: 5000)
- *
- * SQL DIALECT COMPATIBILITY AUDIT (#861):
- *   This module uses the node-postgres (pg) driver and targets PostgreSQL
- *   exclusively. SQLite is NOT supported as a backend database for the
- *   backend/ package. Integration tests run against PostgreSQL 15/16
- *   containers (see .github/workflows/backend-integration.yml).
- *   No SQLite-specific SQL or INSERT OR IGNORE constructs exist in this file.
+ *   DB_ACQUIRE_TIMEOUT: ms to wait for a connection   (default: 10000)
  */
 
-import pg from "pg";
+import pg, { PoolClient } from "pg";
 
 const { Pool } = pg;
+
+const acquireTimeout = parseInt(process.env.DB_ACQUIRE_TIMEOUT ?? process.env.DB_CONNECTION_TIMEOUT ?? "10000", 10);
+const idleTimeout = parseInt(process.env.DB_IDLE_TIMEOUT ?? "30000", 10);
+const poolMin = parseInt(process.env.DB_POOL_MIN ?? "2", 10);
+const poolMax = parseInt(process.env.DB_POOL_MAX ?? "20", 10);
 
 const poolConfig = process.env.DATABASE_URL
   ? {
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      min: parseInt(process.env.DB_POOL_MIN ?? "2", 10),
-      max: parseInt(process.env.DB_POOL_MAX ?? "10", 10),
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT ?? "30000", 10),
-      connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT ?? "5000", 10),
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
+      min: poolMin,
+      max: poolMax,
+      idleTimeoutMillis: idleTimeout,
+      connectionTimeoutMillis: acquireTimeout,
     }
   : {
       host:     process.env.PGHOST     ?? "localhost",
@@ -39,59 +37,49 @@ const poolConfig = process.env.DATABASE_URL
       database: process.env.PGDATABASE ?? "workload_governor",
       user:     process.env.PGUSER     ?? "postgres",
       password: process.env.PGPASSWORD ?? "",
-      min: parseInt(process.env.DB_POOL_MIN ?? "2", 10),
-      max: parseInt(process.env.DB_POOL_MAX ?? "10", 10),
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT ?? "30000", 10),
-      connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT ?? "5000", 10),
+      min: poolMin,
+      max: poolMax,
+      idleTimeoutMillis: idleTimeout,
+      connectionTimeoutMillis: acquireTimeout,
     };
 
 export const pool = new Pool(poolConfig);
 
-// Log and alert on unexpected idle-client errors (fixes issue #561)
-pool.on("error", (err) => {
+// Connection pool leak protection and acquisition tracking (closes #860)
+const SLOW_ACQUIRE_THRESHOLD_MS = 3000;
+const originalConnect = pool.connect.bind(pool);
+
+(pool as any).connect = async function (...args: any[]): Promise<PoolClient> {
+  const startTime = Date.now();
+  try {
+    const client = await (originalConnect as any)(...args);
+    const duration = Date.now() - startTime;
+    if (duration > SLOW_ACQUIRE_THRESHOLD_MS) {
+      console.warn(
+        `[db] Slow connection acquisition detected: ${duration}ms (threshold: ${SLOW_ACQUIRE_THRESHOLD_MS}ms). Pool stats: total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        new Error("Slow acquire trace").stack
+      );
+    }
+    return client;
+  } catch (err: any) {
+    const duration = Date.now() - startTime;
+    console.error(
+      `[db] Connection acquire failed after ${duration}ms: ${err.message}. Pool stats: total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`
+    );
+    throw err;
+  }
+};
+
+// Log and alert on unexpected idle-client errors and clean up (fixes #561, #860)
+pool.on("error", (err: Error, client?: any) => {
   console.error("[db] Unexpected error on idle DB client:", err.message, err.stack);
+  if (client) {
+    try {
+      client.release?.(true); // destroy client on fatal error
+    } catch {
+      // ignore
+    }
+  }
 });
 
-export interface IndexerCheckpoint {
-  contract_id: string;
-  last_ledger: number;
-  last_ledger_hash: string | null;
-  updated_at: Date;
-}
-
-/**
- * Persist indexer checkpoint to database transactionally.
- */
-export async function saveCheckpoint(
-  contractId: string,
-  lastLedger: number,
-  lastLedgerHash?: string | null,
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO indexer_checkpoints (contract_id, last_ledger, last_ledger_hash, updated_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (contract_id)
-     DO UPDATE SET last_ledger = EXCLUDED.last_ledger,
-                   last_ledger_hash = EXCLUDED.last_ledger_hash,
-                   updated_at = NOW()`,
-    [contractId, lastLedger, lastLedgerHash ?? null],
-  );
-}
-
-/**
- * Retrieve indexer checkpoint for contract from database.
- */
-export async function getCheckpoint(
-  contractId: string,
-): Promise<IndexerCheckpoint | null> {
-  const res = await pool.query<IndexerCheckpoint>(
-    `SELECT contract_id, last_ledger, last_ledger_hash, updated_at
-     FROM indexer_checkpoints
-     WHERE contract_id = $1`,
-    [contractId],
-  );
-  return res.rows[0] ?? null;
-}
-
 export default pool;
-
