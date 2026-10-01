@@ -9,8 +9,8 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
-### Added
-- **#862 [DB-005] Database ping latency and connection state metrics on health endpoint**: Updated `src/routes/health.ts` to measure `SELECT 1` round-trip latency, expose `latency_ms` and `pool: { active, idle, waiting }` in the health response, return HTTP 503 when DB is unavailable or latency exceeds 2000ms, and promote `db.status` to a 3-state model (`healthy` | `degraded` | `unhealthy`). Updated `backend/src/health.ts` checkDatabase function with matching pool stats and degraded-state logic. Updated `tests/routes/health.test.ts` to assert all new fields.
+### Changed
+- **#861 [DB-004] SQL query dialect compatibility audit between SQLite (test) and PostgreSQL (prod)**: Audited all raw SQL queries in `backend/src/` and `src/services/`. No `INSERT OR IGNORE` or raw SQLite date functions found — existing code is already dialect-sound for its targets. Added SQL dialect audit documentation comments to `backend/src/db.ts`, `backend/src/github.ts`, and `src/services/issueService.ts` cataloguing all PostgreSQL-specific constructs with justifications. Added a `SQL dialect audit` CI step to `.github/workflows/backend-integration.yml` that fails if `INSERT OR IGNORE` or `date('now')` are introduced in future. CI workflow comment updated to document PostgreSQL-only test strategy.
 
 ---
 

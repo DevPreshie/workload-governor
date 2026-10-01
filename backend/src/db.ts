@@ -11,6 +11,13 @@
  *   DB_POOL_MAX: maximum connections allowed   (default: 10)
  *   DB_IDLE_TIMEOUT: ms before idle connection is closed (default: 30000)
  *   DB_CONNECTION_TIMEOUT: ms to wait for a connection   (default: 5000)
+ *
+ * SQL DIALECT COMPATIBILITY AUDIT (#861):
+ *   This module uses the node-postgres (pg) driver and targets PostgreSQL
+ *   exclusively. SQLite is NOT supported as a backend database for the
+ *   backend/ package. Integration tests run against PostgreSQL 15/16
+ *   containers (see .github/workflows/backend-integration.yml).
+ *   No SQLite-specific SQL or INSERT OR IGNORE constructs exist in this file.
  */
 
 import pg from "pg";
