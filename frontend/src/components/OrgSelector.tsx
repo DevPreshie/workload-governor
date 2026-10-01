@@ -1,373 +1,387 @@
-/**
- * OrgSelector — searchable dropdown for filtering the issue list by organisation.
- *
- * - Fetches org list from GET /api/orgs on mount
- * - Filters orgs in real-time as the user types
- * - Keyboard navigable: ↑/↓ move through options, Enter selects, Escape closes
- * - Persists selected org in the URL query param ?org=
- * - Follows ARIA combobox pattern (role="combobox" + role="listbox")
- */
-
 import {
   useState,
   useEffect,
   useRef,
-  useCallback,
   useId,
+  useCallback,
   type KeyboardEvent,
 } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Skeleton } from "./Skeleton";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface Org {
+  /** Unique identifier for the organisation. */
   id: string;
+  /** Display name (may differ from id). */
   name: string;
-  avatarUrl?: string;
-  activeIssueCount: number;
+  /** Current number of active assignments for the signed-in contributor. */
+  assignmentCount?: number;
 }
 
-interface OrgSelectorProps {
-  /** API base URL — defaults to "/api" */
-  apiBase?: string;
-  /** Called when selection changes. Receives org id or "" for All Orgs. */
-  onSelect?: (orgId: string) => void;
-  /** Injected for testing. Skips fetch when provided. */
-  orgs?: Org[];
+export interface OrgSelectorProps {
+  /** Full list of available organisations. */
+  orgs: Org[];
+  /** Currently selected org id. */
+  value: string | null;
+  /** Called when the user picks an org. */
+  onChange: (org: Org) => void;
+  /** Placeholder text for the search input. */
+  placeholder?: string;
+  /** Maximum number of recent orgs to store. @default 5 */
+  maxRecent?: number;
+  /** localStorage key for persisting recent orgs. */
+  storageKey?: string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-const ALL_ORGS_OPTION: Org = {
-  id: "",
-  name: "All Orgs",
-  activeIssueCount: 0,
-};
+const DEFAULT_MAX_RECENT = 5;
+const DEFAULT_STORAGE_KEY = "wg_recent_orgs";
 
-function OrgAvatar({ org }: { org: Org }) {
-  if (org.avatarUrl) {
-    return (
-      <img
-        src={org.avatarUrl}
-        alt=""
-        className="org-selector__avatar"
-        aria-hidden="true"
-        width={24}
-        height={24}
-      />
-    );
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function loadRecentOrgs(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-  // Fallback: first letter monogram
-  return (
-    <span className="org-selector__avatar org-selector__avatar--fallback" aria-hidden="true">
-      {org.name.charAt(0).toUpperCase()}
-    </span>
-  );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+function saveRecentOrgs(key: string, ids: string[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids));
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
-export function OrgSelector({ apiBase = "/api", onSelect, orgs: propOrgs }: OrgSelectorProps) {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialOrgId = searchParams.get("org") ?? "";
+function addRecentOrg(current: string[], id: string, max: number): string[] {
+  const without = current.filter((x) => x !== id);
+  return [id, ...without].slice(0, max);
+}
 
-  const [orgs, setOrgs] = useState<Org[]>(propOrgs ?? []);
-  const [loading, setLoading] = useState(!propOrgs);
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+/**
+ * Accessible org selector with:
+ * - Real-time search filtering by name or id
+ * - "Recent" section showing the last `maxRecent` used orgs (localStorage)
+ * - Full keyboard navigation: ArrowDown/Up to move, Enter to select, Esc to close
+ * - ARIA combobox pattern (role="combobox" + role="listbox")
+ * - Mobile: full-screen modal overlay on small viewports
+ */
+export function OrgSelector({
+  orgs,
+  value,
+  onChange,
+  placeholder = "Search orgs…",
+  maxRecent = DEFAULT_MAX_RECENT,
+  storageKey = DEFAULT_STORAGE_KEY,
+}: OrgSelectorProps) {
+  const uid = useId();
+  const inputId = `${uid}-input`;
+  const listboxId = `${uid}-listbox`;
+
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
-  const [selectedOrg, setSelectedOrg] = useState<Org>(ALL_ORGS_OPTION);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const [recentIds, setRecentIds] = useState<string[]>(() =>
+    loadRecentOrgs(storageKey)
+  );
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listboxRef = useRef<HTMLUListElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
 
-  const listboxId = useId();
-  const inputId = useId();
+  // Derive label for the trigger button
+  const selectedOrg = orgs.find((o) => o.id === value) ?? null;
 
-  // Fetch orgs from API unless injected
-  const fetchOrgs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/orgs`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { orgs: Org[] };
-      setOrgs(data.orgs ?? []);
-    } catch {
-      // silently fall back to empty list
-      setOrgs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiBase]);
+  // ── Filtering ────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (!propOrgs) void fetchOrgs();
-  }, [propOrgs, fetchOrgs]);
+  const q = query.trim().toLowerCase();
 
-  useEffect(() => {
-    if (propOrgs) setOrgs(propOrgs);
-  }, [propOrgs]);
+  const filteredOrgs = q
+    ? orgs.filter(
+        (o) =>
+          o.name.toLowerCase().includes(q) ||
+          o.id.toLowerCase().includes(q)
+      )
+    : orgs;
 
-  // Resolve initial org from URL param
-  useEffect(() => {
-    if (!initialOrgId) return;
-    const found = orgs.find((o) => o.id === initialOrgId);
-    if (found) {
-      setSelectedOrg(found);
-      setQuery(found.name);
-    }
-  }, [initialOrgId, orgs]);
+  // Recent orgs that exist in the current orgs list
+  const recentOrgs = recentIds
+    .map((id) => orgs.find((o) => o.id === id))
+    .filter((o): o is Org => o !== undefined);
 
-  // ── Filtered options ────────────────────────────────────────────────────────
+  // Build the flat option list shown in the dropdown:
+  // [recent section items…, all-orgs section items…]
+  // When searching, skip the recent section and show filtered results only.
+  const showRecent = !q && recentOrgs.length > 0;
+  const optionList: Org[] = showRecent
+    ? [
+        ...recentOrgs,
+        ...filteredOrgs.filter((o) => !recentIds.includes(o.id)),
+      ]
+    : filteredOrgs;
 
-  const filtered: Org[] = [
-    ALL_ORGS_OPTION,
-    ...orgs.filter((o) =>
-      o.name.toLowerCase().includes(query.toLowerCase()) ||
-      o.id.toLowerCase().includes(query.toLowerCase())
-    ),
-  ];
+  // Index where "All orgs" section begins (used for section header rendering)
+  const allOrgsStartIndex = showRecent ? recentOrgs.length : 0;
 
-  // ── Selection ────────────────────────────────────────────────────────────────
+  // ── Open / close ─────────────────────────────────────────────────────────
 
-  function selectOrg(org: Org) {
-    setSelectedOrg(org);
-    setQuery(org.id === "" ? "" : org.name);
+  const openDropdown = useCallback(() => {
+    setOpen(true);
+    setActiveIndex(-1);
+  }, []);
+
+  const closeDropdown = useCallback(() => {
     setOpen(false);
+    setQuery("");
     setActiveIndex(-1);
     inputRef.current?.blur();
+  }, []);
 
-    // Update URL
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (org.id) {
-        next.set("org", org.id);
-      } else {
-        next.delete("org");
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleOutsideClick(e: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        closeDropdown();
       }
-      return next;
-    }, { replace: true });
+    }
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [open, closeDropdown]);
 
-    onSelect?.(org.id);
-  }
+  // Focus input when dropdown opens
+  useEffect(() => {
+    if (open) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [open]);
 
-  // ── Keyboard navigation ──────────────────────────────────────────────────────
+  // Scroll active item into view
+  useEffect(() => {
+    if (activeIndex < 0 || !listRef.current) return;
+    const item = listRef.current.children[activeIndex] as HTMLElement | undefined;
+    if (item && typeof item.scrollIntoView === "function") {
+      item.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex]);
+
+  // ── Selection ────────────────────────────────────────────────────────────
+
+  const selectOrg = useCallback(
+    (org: Org) => {
+      const nextRecent = addRecentOrg(recentIds, org.id, maxRecent);
+      setRecentIds(nextRecent);
+      saveRecentOrgs(storageKey, nextRecent);
+      onChange(org);
+      closeDropdown();
+    },
+    [recentIds, maxRecent, storageKey, onChange, closeDropdown]
+  );
+
+  // ── Keyboard navigation ──────────────────────────────────────────────────
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (!open) return;
+
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        if (!open) {
-          setOpen(true);
-          setActiveIndex(0);
-        } else {
-          setActiveIndex((i) => (i < 0 ? 0 : Math.min(i + 1, filtered.length - 1)));
-        }
+        setActiveIndex((prev) =>
+          prev < optionList.length - 1 ? prev + 1 : 0
+        );
         break;
-
       case "ArrowUp":
         e.preventDefault();
-        if (!open) {
-          setOpen(true);
-          setActiveIndex(Math.max(0, filtered.length - 1));
-        } else {
-          setActiveIndex((i) => Math.max(i - 1, 0));
-        }
+        setActiveIndex((prev) =>
+          prev > 0 ? prev - 1 : optionList.length - 1
+        );
         break;
-
-      case "Home":
-        if (open && filtered.length > 0) {
-          e.preventDefault();
-          setActiveIndex(0);
-        }
-        break;
-
-      case "End":
-        if (open && filtered.length > 0) {
-          e.preventDefault();
-          setActiveIndex(filtered.length - 1);
-        }
-        break;
-
       case "Enter":
         e.preventDefault();
-        if (open && activeIndex >= 0 && activeIndex < filtered.length) {
-          selectOrg(filtered[activeIndex]);
-        } else if (!open) {
-          setOpen(true);
-          setActiveIndex(0);
+        if (activeIndex >= 0 && optionList[activeIndex]) {
+          selectOrg(optionList[activeIndex]);
         }
         break;
-
       case "Escape":
         e.preventDefault();
-        if (open) {
-          setOpen(false);
-          setActiveIndex(-1);
-          // Restore display value to current selection
-          setQuery(selectedOrg.id === "" ? "" : selectedOrg.name);
-        }
+        closeDropdown();
         break;
-
       case "Tab":
-        if (open && activeIndex >= 0 && activeIndex < filtered.length) {
-          selectOrg(filtered[activeIndex]);
-        } else {
-          setOpen(false);
-        }
+        closeDropdown();
         break;
     }
   }
 
-  // Scroll active option into view
-  useEffect(() => {
-    if (!open || activeIndex < 0) return;
-    const items = listboxRef.current?.querySelectorAll<HTMLLIElement>("[role='option']");
-    items?.[activeIndex]?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, open]);
+  // ── Option id helper (for aria-activedescendant) ─────────────────────────
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setActiveIndex(-1);
-        setQuery(selectedOrg.id === "" ? "" : selectedOrg.name);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [selectedOrg]);
-
-  // ── Render ────────────────────────────────────────────────────────────────────
-
-  // Show skeleton placeholder while orgs are loading from the API
-  if (loading) {
-    return (
-      <div className="org-selector" aria-busy="true">
-        <label className="org-selector__label">Organisation</label>
-        <div role="status" aria-label="Loading organisations">
-          <Skeleton width="100%" height="2.5rem" />
-        </div>
-      </div>
-    );
+  function optionId(index: number) {
+    return `${uid}-option-${index}`;
   }
 
-  const displayValue = open ? query : (selectedOrg.id === "" ? "" : selectedOrg.name);
-  const placeholder = "Search or select an org…";
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div
       ref={containerRef}
-      className="org-selector"
-      data-open={open}
+      className={`org-selector${open ? " org-selector--open" : ""}`}
+      data-testid="org-selector"
     >
-      <label htmlFor={inputId} className="org-selector__label">
-        Organisation
-      </label>
-
-      <div className="org-selector__control">
-        {selectedOrg.id && !open && (
-          <OrgAvatar org={selectedOrg} />
-        )}
-        <input
-          ref={inputRef}
-          id={inputId}
-          className="org-selector__input"
-          type="text"
-          role="combobox"
-          autoComplete="off"
-          spellCheck={false}
-          value={displayValue}
-          placeholder={placeholder}
-          aria-label="Search organisations"
-          aria-autocomplete="list"
-          aria-controls={listboxId}
-          aria-haspopup="listbox"
-          aria-activedescendant={
-            open && activeIndex >= 0
-              ? `org-option-${filtered[activeIndex]?.id || "all"}`
-              : undefined
-          }
-          aria-expanded={open}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-            setActiveIndex(0);
-          }}
-          onFocus={() => {
-            setOpen(true);
-            setQuery("");
-          }}
-          onKeyDown={handleKeyDown}
-        />
-        <button
-          className="org-selector__chevron"
-          tabIndex={-1}
-          aria-hidden="true"
-          onClick={() => {
-            setOpen((o) => !o);
-            if (!open) inputRef.current?.focus();
-          }}
-          type="button"
-        >
+      {/* Trigger button */}
+      <button
+        type="button"
+        className="org-selector__trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        onClick={() => (open ? closeDropdown() : openDropdown())}
+        data-testid="org-selector-trigger"
+      >
+        <span className="org-selector__trigger-label">
+          {selectedOrg ? selectedOrg.name : "Select an organisation"}
+        </span>
+        <span className="org-selector__trigger-icon" aria-hidden="true">
           {open ? "▲" : "▼"}
-        </button>
-      </div>
+        </span>
+      </button>
 
+      {/* Dropdown */}
       {open && (
-        <ul
-          ref={listboxRef}
-          id={listboxId}
-          role="listbox"
-          className="org-selector__listbox"
-          aria-label="Organisations"
+        <div
+          className="org-selector__dropdown"
+          role="dialog"
+          aria-label="Select organisation"
+          data-testid="org-selector-dropdown"
         >
-          {filtered.length === 0 ? (
-            <li className="org-selector__no-results" role="option" aria-selected={false}>
-              No organisations match "{query}"
-            </li>
-          ) : (
-            filtered.map((org, idx) => (
+          {/* Search input — combobox */}
+          <div className="org-selector__search">
+            <input
+              ref={inputRef}
+              id={inputId}
+              type="text"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={open}
+              aria-controls={listboxId}
+              aria-activedescendant={
+                activeIndex >= 0 ? optionId(activeIndex) : undefined
+              }
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActiveIndex(-1);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+              className="org-selector__input"
+              data-testid="org-selector-input"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+
+          {/* Option list */}
+          <ul
+            ref={listRef}
+            id={listboxId}
+            role="listbox"
+            aria-label="Organisations"
+            className="org-selector__list"
+            data-testid="org-selector-list"
+          >
+            {optionList.length === 0 ? (
               <li
-                key={org.id || "__all__"}
-                id={`org-option-${org.id || "all"}`}
                 role="option"
-                className={[
-                  "org-selector__option",
-                  idx === activeIndex ? "org-selector__option--active" : "",
-                  selectedOrg.id === org.id ? "org-selector__option--selected" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                aria-selected={selectedOrg.id === org.id}
-                onMouseEnter={() => setActiveIndex(idx)}
-                onMouseDown={(e) => {
-                  e.preventDefault(); // prevent input blur before click
-                  selectOrg(org);
-                }}
+                aria-selected={false}
+                className="org-selector__empty"
+                data-testid="org-selector-empty"
               >
-                <OrgAvatar org={org} />
-                <span className="org-selector__option-name">
-                  {org.id === "" ? <em>All Orgs</em> : org.name}
-                </span>
-                {org.id !== "" && (
-                  <span
-                    className="org-selector__issue-count"
-                    aria-label={`${org.activeIssueCount} active issues`}
-                  >
-                    {org.activeIssueCount}
-                  </span>
-                )}
-                {selectedOrg.id === org.id && (
-                  <span className="org-selector__checkmark" aria-hidden="true">✓</span>
-                )}
+                No organisations match &ldquo;{query}&rdquo;
               </li>
-            ))
-          )}
-        </ul>
+            ) : (
+              optionList.map((org, index) => {
+                const isActive = index === activeIndex;
+                const isSelected = org.id === value;
+
+                // Section heading: "Recent" before first item, "All orgs"
+                // before allOrgsStartIndex (only when there are recent items)
+                const showRecentHeader = showRecent && index === 0;
+                const showAllOrgsHeader =
+                  showRecent && index === allOrgsStartIndex;
+
+                return (
+                  <li key={org.id}>
+                    {showRecentHeader && (
+                      <div
+                        className="org-selector__section-header"
+                        aria-hidden="true"
+                        data-testid="section-recent"
+                      >
+                        Recent
+                      </div>
+                    )}
+                    {showAllOrgsHeader && (
+                      <div
+                        className="org-selector__section-header"
+                        aria-hidden="true"
+                        data-testid="section-all"
+                      >
+                        All orgs
+                      </div>
+                    )}
+                    <div
+                      id={optionId(index)}
+                      role="option"
+                      aria-selected={isSelected}
+                      className={[
+                        "org-selector__option",
+                        isActive ? "org-selector__option--active" : "",
+                        isSelected ? "org-selector__option--selected" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => selectOrg(org)}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      data-testid={`org-option-${org.id}`}
+                      // Support click via keyboard-driven focus
+                      // (keyboard nav uses Enter; mouse click handled above)
+                    >
+                      <span className="org-selector__option-name">
+                        {org.name}
+                      </span>
+                      {org.assignmentCount !== undefined && (
+                        <span
+                          className="org-selector__option-count"
+                          aria-label={`${org.assignmentCount} of 4 assignments`}
+                        >
+                          {org.assignmentCount}/4
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </div>
       )}
     </div>
   );
