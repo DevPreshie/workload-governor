@@ -94,11 +94,45 @@ jobs:
           path: target/wasm32v1-none/release/workload_governor.wasm
           retention-days: 7
 
+  # ── 3. Contracts package — build + test ─────────────────────────────────
+  #
+  # Validates that the `contracts/` re-export shim compiles cleanly and that
+  # all smoke tests against the canonical interface pass.  Both packages in
+  # the Cargo workspace must compile without errors or warnings.
+  test-contracts:
+    name: Contracts package (build + test)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-contracts-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-contracts-
+
+      - name: cargo build --package contracts
+        run: cargo build --package contracts --features testutils
+
+      - name: cargo test --package contracts
+        run: cargo test --package contracts --features testutils
+
+      - name: Verify workspace compiles (all members)
+        run: cargo check --workspace --features testutils
+
   # ── 4. Optimize + Upload Artifact (every main merge) ────────────────────
   optimize:
     name: Optimize WASM
     runs-on: ubuntu-latest
-    needs: build-wasm
+    needs: [test, test-contracts]
     # Run on every push to main AND on every PR (so the artifact is available
     # for review). Acceptance criterion: artifact uploaded on every main merge.
     if: github.event_name != 'schedule'
@@ -114,11 +148,14 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            mutants-report.txt
-            mutants.out/mutation-report.html
-            mutants.out/outcomes.json
-            mutants.out/caught.txt
-            mutants.out/missed.txt
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-optimize-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-optimize-
+
+      - name: Build WASM
+        run: cargo build --target wasm32v1-none --release
 
       - name: Optimize WASM
         run: |
