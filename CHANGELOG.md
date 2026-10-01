@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Expand the `withdraw_application` section of `docs/contributor-guide.md` with UI and CLI walkthroughs, global count effects, and edge-case error codes; add `ApplicationNotFound` details to `docs/error-reference.md`. (#792)
+- Document the Jest/Vitest/Playwright/Cargo config inventory, the rationale for the config split, a full command reference, CI job mapping, and Codecov flags in `docs/testing.md`. (#793)
 
 ---
 
