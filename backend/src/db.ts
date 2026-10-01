@@ -45,4 +45,46 @@ pool.on("error", (err) => {
   console.error("[db] Unexpected error on idle DB client:", err.message, err.stack);
 });
 
+export interface IndexerCheckpoint {
+  contract_id: string;
+  last_ledger: number;
+  last_ledger_hash: string | null;
+  updated_at: Date;
+}
+
+/**
+ * Persist indexer checkpoint to database transactionally.
+ */
+export async function saveCheckpoint(
+  contractId: string,
+  lastLedger: number,
+  lastLedgerHash?: string | null,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO indexer_checkpoints (contract_id, last_ledger, last_ledger_hash, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (contract_id)
+     DO UPDATE SET last_ledger = EXCLUDED.last_ledger,
+                   last_ledger_hash = EXCLUDED.last_ledger_hash,
+                   updated_at = NOW()`,
+    [contractId, lastLedger, lastLedgerHash ?? null],
+  );
+}
+
+/**
+ * Retrieve indexer checkpoint for contract from database.
+ */
+export async function getCheckpoint(
+  contractId: string,
+): Promise<IndexerCheckpoint | null> {
+  const res = await pool.query<IndexerCheckpoint>(
+    `SELECT contract_id, last_ledger, last_ledger_hash, updated_at
+     FROM indexer_checkpoints
+     WHERE contract_id = $1`,
+    [contractId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export default pool;
+
