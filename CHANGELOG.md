@@ -10,7 +10,7 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 ## [Unreleased]
 
 ### Added
-- Add `scripts/check-api-docs-sync.js` and a `docs-sync` CI job that fail when an `openapi.yaml` operation is missing from `docs/api-reference.md`; document the 16 missing spec endpoints and the endpoint-change workflow in `docs/contributing.md`. (#790)
+- Add ADR-006 documenting the two-step `propose_admin` / `accept_admin` admin transfer pattern, with cross-links from the ADR index, README, admin guide, and key rotation runbook. (#791)
 
 ---
 
