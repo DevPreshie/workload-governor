@@ -1,9 +1,9 @@
 import nock from "nock";
-import { HorizonService, HorizonAccount, CircuitBreaker, CircuitState } from "../HorizonService";
+import { HorizonService, HorizonAccount, HorizonTransaction, HorizonEvent } from "../HorizonService";
 import { HorizonError } from "../HorizonError";
+import { SpanStatusCode, Tracer, Span, SpanStatus, SpanEvent } from "../tracing";
 
 const BASE = "https://horizon-testnet.stellar.org";
-const BASE2 = "https://horizon2-testnet.stellar.org";
 const ACCOUNT_ID = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
 const MOCK_ACCOUNT: HorizonAccount = {
@@ -12,55 +12,165 @@ const MOCK_ACCOUNT: HorizonAccount = {
   balances: [{ balance: "100.0000000", asset_type: "native" }],
 };
 
+const MOCK_TRANSACTION: HorizonTransaction = {
+  id: "tx-123",
+  hash: "e5a7b8c9d0",
+  ledger: 500123,
+  created_at: "2026-09-25T12:00:00Z",
+  fee_charged: 100,
+  operation_count: 1,
+  successful: true,
+};
+
+const MOCK_EVENTS: HorizonEvent[] = [
+  {
+    id: "0000500123-0000000001",
+    type: "contract",
+    ledger: 500123,
+    created_at: "2026-09-25T12:00:00Z",
+  },
+];
+
+class MockSpan implements Span {
+  public attributes: Record<string, unknown> = {};
+  public events: SpanEvent[] = [];
+  public status: SpanStatus = { code: SpanStatusCode.UNSET };
+  public ended = false;
+
+  constructor(public readonly name: string, initialAttributes: Record<string, unknown> = {}) {
+    this.attributes = { ...initialAttributes };
+  }
+
+  setAttribute(key: string, value: unknown): this {
+    this.attributes[key] = value;
+    return this;
+  }
+
+  setAttributes(attrs: Record<string, unknown>): this {
+    Object.assign(this.attributes, attrs);
+    return this;
+  }
+
+  addEvent(name: string, attributes?: Record<string, unknown>): this {
+    this.events.push({ name, attributes, time: Date.now() });
+    return this;
+  }
+
+  setStatus(status: SpanStatus): this {
+    this.status = status;
+    return this;
+  }
+
+  recordException(exception: Error | string): this {
+    const err = exception instanceof Error ? exception : new Error(String(exception));
+    this.events.push({
+      name: "exception",
+      attributes: { "exception.message": err.message },
+      time: Date.now(),
+    });
+    this.status = { code: SpanStatusCode.ERROR, message: err.message };
+    return this;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+
+  isRecording(): boolean {
+    return !this.ended;
+  }
+
+  spanContext() {
+    return { traceId: "test-trace-id", spanId: "test-span-id", traceFlags: 1 };
+  }
+}
+
+class TestTracer implements Tracer {
+  public spans: MockSpan[] = [];
+
+  startSpan(name: string, options?: { attributes?: Record<string, unknown> }): Span {
+    const span = new MockSpan(name, options?.attributes ?? {});
+    this.spans.push(span);
+    return span;
+  }
+
+  startActiveSpan<T>(name: string, fnOrOptions: any, maybeFn?: any): T {
+    const fn = typeof fnOrOptions === "function" ? fnOrOptions : maybeFn;
+    const span = this.startSpan(name);
+    return fn(span);
+  }
+}
+
 beforeEach(() => nock.cleanAll());
 afterAll(() => nock.restore());
 
-// ---------------------------------------------------------------------------
-// Original single-endpoint tests (preserved for backwards-compatibility)
-// ---------------------------------------------------------------------------
-
-describe("HorizonService – single endpoint", () => {
+describe("HorizonService", () => {
+  let tracer: TestTracer;
   let svc: HorizonService;
-  beforeEach(() => {
-    svc = new HorizonService(BASE);
-  });
-  afterEach(() => svc.getCircuitBreaker().destroy());
 
-  it("returns a parsed account on 200", async () => {
+  beforeEach(() => {
+    tracer = new TestTracer();
+    svc = new HorizonService(BASE, tracer);
+  });
+
+  // ── fetchAccount ──────────────────────────────────────────────────────────
+
+  it("returns a parsed account on 200 and records trace span attributes", async () => {
     nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(200, MOCK_ACCOUNT);
 
     const account = await svc.fetchAccount(ACCOUNT_ID);
 
     expect(account).toEqual(MOCK_ACCOUNT);
+    expect(tracer.spans).toHaveLength(1);
+    const span = tracer.spans[0];
+    expect(span.name).toBe("Horizon.fetchAccount");
+    expect(span.attributes["rpc.method"]).toBe("fetchAccount");
+    expect(span.attributes["rpc.endpoint"]).toBe(`${BASE}/accounts/${ACCOUNT_ID}`);
+    expect(span.attributes["http.status_code"]).toBe(200);
+    expect(span.attributes["stellar.ledger_sequence"]).toBe(1234567890);
+    expect(typeof span.attributes["rpc.response_latency_ms"]).toBe("number");
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.ended).toBe(true);
   });
 
-  it("returns null on 404 without throwing", async () => {
+  it("returns null on 404 without throwing and records status 404", async () => {
     nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(404, { status: 404 });
 
     const account = await svc.fetchAccount(ACCOUNT_ID);
 
     expect(account).toBeNull();
+    const span = tracer.spans[0];
+    expect(span.attributes["http.status_code"]).toBe(404);
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.ended).toBe(true);
   });
 
-  it("retries on 429 and throws HorizonError after exhausting retries", async () => {
+  it("retries on 429 and records retry events before failing", async () => {
     nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(429).persist();
 
     await expect(svc.fetchAccount(ACCOUNT_ID)).rejects.toMatchObject({
       name: "HorizonError",
       status: 429,
     });
+
+    const span = tracer.spans[0];
+    const retryEvents = span.events.filter((e) => e.name === "retry");
+    expect(retryEvents.length).toBeGreaterThan(0);
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span.ended).toBe(true);
   }, 10_000);
 
   it("throws HorizonError with status 200 on malformed JSON response", async () => {
-    nock(BASE)
-      .get(`/accounts/${ACCOUNT_ID}`)
-      .reply(200, "{ not valid json !!!");
+    nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(200, "{ not valid json !!!");
 
     await expect(svc.fetchAccount(ACCOUNT_ID)).rejects.toMatchObject({
       name: "HorizonError",
       status: 200,
       message: "Malformed JSON in Horizon response",
     });
+
+    const span = tracer.spans[0];
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it("throws HorizonError on unexpected account shape", async () => {
@@ -71,15 +181,22 @@ describe("HorizonService – single endpoint", () => {
       status: 200,
       message: "Unexpected Horizon account shape",
     });
+
+    const span = tracer.spans[0];
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
   });
 
-  it("throws HorizonError on non-200/404/429 status", async () => {
+  it("throws HorizonError on non-200/404/429 status and records ERROR span status", async () => {
     nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(500);
 
     await expect(svc.fetchAccount(ACCOUNT_ID)).rejects.toMatchObject({
       name: "HorizonError",
       status: 500,
     });
+
+    const span = tracer.spans[0];
+    expect(span.attributes["http.status_code"]).toBe(500);
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it("uses the default Horizon testnet base URL when constructed without arguments", async () => {
@@ -90,262 +207,118 @@ describe("HorizonService – single endpoint", () => {
 
     const account = await defaultSvc.fetchAccount(ACCOUNT_ID);
     expect(account).toEqual(MOCK_ACCOUNT);
-    defaultSvc.getCircuitBreaker().destroy();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Circuit-breaker unit tests
-// ---------------------------------------------------------------------------
-
-describe("CircuitBreaker", () => {
-  let cb: CircuitBreaker;
-  beforeEach(() => {
-    cb = new CircuitBreaker([BASE, BASE2]);
-  });
-  afterEach(() => cb.destroy());
-
-  it("starts with all endpoints closed", () => {
-    const eps = cb.getEndpoints();
-    expect(eps).toHaveLength(2);
-    eps.forEach((ep) => expect(ep.state).toBe<CircuitState>("closed"));
   });
 
-  it("records successes and keeps circuit closed", () => {
-    cb.recordSuccess(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("closed");
-    expect(cb.getEndpoints()[0].failures).toBe(0);
-  });
+  // ── fetchEvents ───────────────────────────────────────────────────────────
 
-  it("recordSuccess is a no-op for an unknown URL", () => {
-    cb.recordSuccess("https://unknown.example.com");
-    // Neither endpoint should be affected
-    cb.getEndpoints().forEach((ep) => expect(ep.failures).toBe(0));
-  });
+  describe("fetchEvents", () => {
+    it("fetches events, records span attributes including target URL, method, and latency", async () => {
+      nock(BASE)
+        .get("/events?start_ledger=500100&limit=10")
+        .reply(200, { _embedded: { records: MOCK_EVENTS }, latest_ledger: 500123 });
 
-  it("recordFailure is a no-op for an unknown URL", () => {
-    cb.recordFailure("https://unknown.example.com");
-    cb.getEndpoints().forEach((ep) => expect(ep.failures).toBe(0));
-  });
+      const events = await svc.fetchEvents(500100, undefined, 10);
 
-  it("opens the circuit after 3 consecutive failures", () => {
-    cb.recordFailure(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("closed");
-    cb.recordFailure(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("closed");
-    cb.recordFailure(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-  });
-
-  it("resets failure count and closes circuit on success after failures", () => {
-    cb.recordFailure(BASE);
-    cb.recordFailure(BASE);
-    cb.recordSuccess(BASE);
-    const ep = cb.getEndpoints()[0];
-    expect(ep.state).toBe<CircuitState>("closed");
-    expect(ep.failures).toBe(0);
-  });
-
-  it("nextEndpoint skips open circuits and returns the next available one", () => {
-    // Trip BASE
-    cb.recordFailure(BASE);
-    cb.recordFailure(BASE);
-    cb.recordFailure(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-
-    const ep = cb.nextEndpoint();
-    expect(ep?.url).toBe(BASE2);
-  });
-
-  it("returns null when all endpoints are open", () => {
-    [BASE, BASE2].forEach((url) => {
-      for (let i = 0; i < 3; i++) cb.recordFailure(url);
+      expect(events).toEqual(MOCK_EVENTS);
+      expect(tracer.spans).toHaveLength(1);
+      const span = tracer.spans[0];
+      expect(span.name).toBe("Horizon.fetchEvents");
+      expect(span.attributes["rpc.method"]).toBe("fetchEvents");
+      expect(span.attributes["rpc.endpoint"]).toContain("/events?start_ledger=500100&limit=10");
+      expect(span.attributes["http.status_code"]).toBe(200);
+      expect(span.attributes["stellar.ledger_sequence"]).toBe(500123);
+      expect(typeof span.attributes["rpc.response_latency_ms"]).toBe("number");
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+      expect(span.ended).toBe(true);
     });
-    expect(cb.nextEndpoint()).toBeNull();
-  });
 
-  it("transitions to half-open when probe window has elapsed", () => {
-    // Trip BASE
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
+    it("records exception and sets ERROR status on malformed JSON response", async () => {
+      nock(BASE).get("/events").reply(200, "malformed-json");
 
-    // Back-date the probe window so it appears expired
-    const eps = (cb as unknown as { endpoints: Array<{ url: string; state: CircuitState; failures: number; nextProbeAt: number }> }).endpoints;
-    eps[0].nextProbeAt = Date.now() - 1;
+      await expect(svc.fetchEvents()).rejects.toThrow(HorizonError);
 
-    const ep = cb.nextEndpoint();
-    expect(ep?.url).toBe(BASE);
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("half-open");
-  });
-
-  it("restores endpoint to closed after successful half-open probe", () => {
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    cb.recordSuccess(BASE); // Simulate successful probe
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("closed");
-    expect(cb.getEndpoints()[0].failures).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// probeOpenEndpoints tests
-// ---------------------------------------------------------------------------
-
-describe("CircuitBreaker.probeOpenEndpoints", () => {
-  let cb: CircuitBreaker;
-  beforeEach(() => {
-    cb = new CircuitBreaker([BASE, BASE2]);
-  });
-  afterEach(() => {
-    cb.destroy();
-    nock.cleanAll();
-  });
-
-  it("restores an open endpoint to closed when probe succeeds with 200", async () => {
-    // Trip BASE
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    // Back-date probe window
-    const eps = (cb as unknown as { endpoints: Array<{ url: string; state: CircuitState; failures: number; nextProbeAt: number }> }).endpoints;
-    eps[0].nextProbeAt = Date.now() - 1;
-
-    nock(BASE).get("/").reply(200, "ok");
-    await cb.probeOpenEndpoints();
-
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("closed");
-    expect(cb.getEndpoints()[0].failures).toBe(0);
-  });
-
-  it("keeps endpoint open and reschedules probe when probe returns 500", async () => {
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    const eps = (cb as unknown as { endpoints: Array<{ url: string; state: CircuitState; failures: number; nextProbeAt: number }> }).endpoints;
-    eps[0].nextProbeAt = Date.now() - 1;
-
-    nock(BASE).get("/").reply(500);
-    await cb.probeOpenEndpoints();
-
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-    expect(cb.getEndpoints()[0].nextProbeAt).toBeGreaterThan(Date.now());
-  });
-
-  it("keeps endpoint open and reschedules probe when probe returns 429", async () => {
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    const eps = (cb as unknown as { endpoints: Array<{ url: string; state: CircuitState; failures: number; nextProbeAt: number }> }).endpoints;
-    eps[0].nextProbeAt = Date.now() - 1;
-
-    nock(BASE).get("/").reply(429);
-    await cb.probeOpenEndpoints();
-
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-  });
-
-  it("keeps endpoint open and reschedules on network error during probe", async () => {
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    const eps = (cb as unknown as { endpoints: Array<{ url: string; state: CircuitState; failures: number; nextProbeAt: number }> }).endpoints;
-    eps[0].nextProbeAt = Date.now() - 1;
-
-    nock(BASE).get("/").replyWithError("probe network error");
-    await cb.probeOpenEndpoints();
-
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-    expect(cb.getEndpoints()[0].nextProbeAt).toBeGreaterThan(Date.now());
-  });
-
-  it("skips endpoints that are closed", async () => {
-    // Both endpoints closed — probe should be a no-op
-    await cb.probeOpenEndpoints();
-    cb.getEndpoints().forEach((ep) => expect(ep.state).toBe<CircuitState>("closed"));
-  });
-
-  it("skips endpoints whose probe window has not elapsed", async () => {
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE);
-    // Do NOT back-date nextProbeAt — it should be in the future
-    const initialProbeAt = cb.getEndpoints()[0].nextProbeAt;
-
-    await cb.probeOpenEndpoints(); // should do nothing
-
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-    expect(cb.getEndpoints()[0].nextProbeAt).toBe(initialProbeAt);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Multi-endpoint failover integration tests
-// ---------------------------------------------------------------------------
-
-describe("HorizonService – multi-endpoint failover", () => {
-  let svc: HorizonService;
-  beforeEach(() => {
-    svc = new HorizonService(`${BASE},${BASE2}`);
-  });
-  afterEach(() => {
-    svc.getCircuitBreaker().destroy();
-    nock.cleanAll();
-  });
-
-  it("uses both endpoints (round-robin)", async () => {
-    nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(200, MOCK_ACCOUNT);
-    nock(BASE2).get(`/accounts/${ACCOUNT_ID}`).reply(200, MOCK_ACCOUNT);
-
-    const first = await svc.fetchAccount(ACCOUNT_ID);
-    const second = await svc.fetchAccount(ACCOUNT_ID);
-
-    expect(first).toEqual(MOCK_ACCOUNT);
-    expect(second).toEqual(MOCK_ACCOUNT);
-  });
-
-  it("fails over to second endpoint when primary returns 503", async () => {
-    // Trip BASE by making it fail 3 times consecutively
-    // We need to control which URL is used, so manually trip the circuit breaker
-    const cb = svc.getCircuitBreaker();
-
-    // Record 3 failures on BASE to open its circuit
-    for (let i = 0; i < 3; i++) {
-      cb.recordFailure(BASE);
-    }
-    expect(cb.getEndpoints()[0].state).toBe<CircuitState>("open");
-
-    // Now all requests should go to BASE2
-    nock(BASE2).get(`/accounts/${ACCOUNT_ID}`).reply(200, MOCK_ACCOUNT);
-
-    const result = await svc.fetchAccount(ACCOUNT_ID);
-    expect(result).toEqual(MOCK_ACCOUNT);
-  });
-
-  it("throws HorizonError 503 when all endpoints are unavailable", async () => {
-    const cb = svc.getCircuitBreaker();
-    // Manually open all circuits
-    for (let i = 0; i < 3; i++) {
-      cb.recordFailure(BASE);
-      cb.recordFailure(BASE2);
-    }
-
-    await expect(svc.fetchAccount(ACCOUNT_ID)).rejects.toMatchObject({
-      status: 503,
-      message: "All RPC endpoints are unavailable",
+      const span = tracer.spans[0];
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.ended).toBe(true);
     });
   });
 
-  it("records success on primary and resets circuit after failover", async () => {
-    nock(BASE).get(`/accounts/${ACCOUNT_ID}`).reply(200, MOCK_ACCOUNT);
+  // ── getTransaction ────────────────────────────────────────────────────────
 
-    await svc.fetchAccount(ACCOUNT_ID);
+  describe("getTransaction", () => {
+    it("fetches transaction, records ledger sequence and status code", async () => {
+      nock(BASE).get(`/transactions/${MOCK_TRANSACTION.hash}`).reply(200, MOCK_TRANSACTION);
 
-    const eps = svc.getCircuitBreaker().getEndpoints();
-    expect(eps[0].state).toBe<CircuitState>("closed");
-    expect(eps[0].failures).toBe(0);
-  });
+      const tx = await svc.getTransaction(MOCK_TRANSACTION.hash);
 
-  it("records failure and throws HorizonError on network-level error", async () => {
-    nock(BASE).get(`/accounts/${ACCOUNT_ID}`).replyWithError("connection refused");
-    // Trip BASE2 so only BASE is selected
-    const cb = svc.getCircuitBreaker();
-    for (let i = 0; i < 3; i++) cb.recordFailure(BASE2);
-
-    await expect(svc.fetchAccount(ACCOUNT_ID)).rejects.toMatchObject({
-      name: "HorizonError",
-      status: 0,
-      message: expect.stringContaining("Network error"),
+      expect(tx).toEqual(MOCK_TRANSACTION);
+      const span = tracer.spans[0];
+      expect(span.name).toBe("Horizon.getTransaction");
+      expect(span.attributes["rpc.method"]).toBe("getTransaction");
+      expect(span.attributes["rpc.endpoint"]).toBe(`${BASE}/transactions/${MOCK_TRANSACTION.hash}`);
+      expect(span.attributes["http.status_code"]).toBe(200);
+      expect(span.attributes["stellar.ledger_sequence"]).toBe(500123);
+      expect(typeof span.attributes["rpc.response_latency_ms"]).toBe("number");
+      expect(span.status.code).toBe(SpanStatusCode.OK);
     });
 
-    // Failure should have been recorded on BASE
-    expect(cb.getEndpoints()[0].failures).toBeGreaterThan(0);
+    it("returns null on 404 without error status", async () => {
+      nock(BASE).get("/transactions/unknown-hash").reply(404);
+
+      const tx = await svc.getTransaction("unknown-hash");
+
+      expect(tx).toBeNull();
+      const span = tracer.spans[0];
+      expect(span.attributes["http.status_code"]).toBe(404);
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+    });
+
+    it("records error and exception on 500 failure", async () => {
+      nock(BASE).get(`/transactions/${MOCK_TRANSACTION.hash}`).reply(500);
+
+      await expect(svc.getTransaction(MOCK_TRANSACTION.hash)).rejects.toThrow(HorizonError);
+
+      const span = tracer.spans[0];
+      expect(span.attributes["http.status_code"]).toBe(500);
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.events.some((e) => e.name === "error")).toBe(true);
+    });
+  });
+
+  // ── sendTransaction ───────────────────────────────────────────────────────
+
+  describe("sendTransaction", () => {
+    it("submits transaction via POST and records span attributes", async () => {
+      const txXdr = "AAAAAGXdrPayload...";
+      const mockResult = { hash: "new-tx-hash", ledger: 500125, successful: true };
+
+      nock(BASE)
+        .post("/transactions", `tx=${encodeURIComponent(txXdr)}`)
+        .reply(200, mockResult);
+
+      const res = await svc.sendTransaction(txXdr);
+
+      expect(res).toEqual(mockResult);
+      const span = tracer.spans[0];
+      expect(span.name).toBe("Horizon.sendTransaction");
+      expect(span.attributes["rpc.method"]).toBe("sendTransaction");
+      expect(span.attributes["rpc.endpoint"]).toBe(`${BASE}/transactions`);
+      expect(span.attributes["http.status_code"]).toBe(200);
+      expect(span.attributes["stellar.ledger_sequence"]).toBe(500125);
+      expect(typeof span.attributes["rpc.response_latency_ms"]).toBe("number");
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+      expect(span.ended).toBe(true);
+    });
+
+    it("records error events and sets ERROR status on submission failure", async () => {
+      nock(BASE).post("/transactions").reply(400, { error: "bad request" });
+
+      await expect(svc.sendTransaction("bad-xdr")).rejects.toThrow(HorizonError);
+
+      const span = tracer.spans[0];
+      expect(span.attributes["http.status_code"]).toBe(400);
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.ended).toBe(true);
+    });
   });
 });
