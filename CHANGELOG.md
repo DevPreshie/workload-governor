@@ -9,9 +9,8 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
 ## [Unreleased]
 
-### Added
-- Add document schema section to `docs/ACCESSIBILITY_AUDIT.md` defining severity levels (Critical/High/Medium/Low), status values (Open/In Progress/Fixed/Won't Fix/Deferred), and table field descriptions. (#800)
-- Add re-audit process section to `docs/ACCESSIBILITY_AUDIT.md` covering when to re-audit, tools (axe-core, Playwright, screen reader), how to update tracking table status, and how to add new findings. (#800)
+### Changed
+- **#864 [INFRA-002] Align ECS task CPU/memory with container definitions**: Updated `terraform/modules/compute/main.tf` to expose `cpu` and `memory` as configurable variables via `variables.tf`, eliminating 50% stranded Fargate capacity. Container-level CPU/memory reservations now exactly match task-level allocations. Per-environment defaults are set via `terraform.tfvars.example` (staging: 512 CPU / 1024 MB; production: 1024 CPU / 2048 MB). Autoscaling metric thresholds in `infra/ecs-autoscaling.tf` are now driven by `cpu_target_utilization` and `memory_target_utilization` variables, with a new memory tracking policy and alarm added.
 
 ---
 
@@ -70,9 +69,6 @@ For guidelines on writing changelog entries see [docs/changelog-guide.md](docs/c
 
   New tokens added: `--color-error-600: #dc2626`, `--color-success-600: #16a34a`,
   `--color-warning-600: #ca8a04`. All fixes applied at token level — no component overrides.
-- **#809 Toast keyboard accessibility**: Toast notifications now include a visible,
-  focusable dismiss button, support Escape-key dismissal, and pause auto-dismiss while
-  hovered or focused.
 
 ### Added
 - **#607 Comprehensive contributor onboarding guide**: Expanded `docs/contributor-guide.md`
