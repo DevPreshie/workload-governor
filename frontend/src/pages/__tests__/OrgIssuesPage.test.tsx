@@ -82,6 +82,7 @@ describe('OrgIssuesPage withdraw flow', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('builds the withdraw transaction, then signs and submits only after confirmation', async () => {
